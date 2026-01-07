@@ -4,131 +4,224 @@ import sqlite3
 import plotly.express as px
 import os
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Portal de Suprimentos & Compliance", page_icon="🛡️", layout="wide")
+# --- CONFIGURAÇÃO VISUAL ---
+st.set_page_config(page_title="Gestão de Suprimentos 5.0", page_icon="🏗️", layout="wide")
 
-# CSS para garantir que os números nos balões fiquem visíveis (Azul sobre Cinza)
+# CSS para formatar tabelas e métricas
 st.markdown("""
     <style>
-    [data-testid="stMetricValue"] { color: #004280 !important; font-size: 28px !important; }
-    [data-testid="stMetricLabel"] { color: #333333 !important; font-weight: bold !important; }
-    div[data-testid="stMetric"] { background-color: #f0f2f6; padding: 15px; border-radius: 10px; border: 1px solid #d1d5db; }
-    .stTabs [aria-selected="true"] { background-color: #004280 !important; color: white !important; }
+    [data-testid="stMetricValue"] { font-size: 26px !important; color: #004280; }
+    div[data-testid="stMetric"] { background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 10px; border-radius: 5px; }
+    .stDataFrame { font-size: 14px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 1. CARREGAR DADOS ---
+# --- FUNÇÃO DE FORMATAÇÃO BRL ---
+def format_brl(valor):
+    if pd.isna(valor): return "R$ 0,00"
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+# --- 1. CARREGAMENTO DE DADOS ---
 @st.cache_data
 def carregar_dados():
-    # Procura o arquivo na mesma pasta do script
-    caminho_db = "compras_suprimentos.db"
-    if not os.path.exists(caminho_db):
-        st.error(f"Arquivo {caminho_db} não encontrado! Certifique-se de que ele está na mesma pasta do app.")
+    db_path = "compras_suprimentos.db"
+    if not os.path.exists(db_path):
+        st.error("Erro: Banco de dados não encontrado.")
         return pd.DataFrame()
     
-    conn = sqlite3.connect(caminho_db)
+    conn = sqlite3.connect(db_path)
     df = pd.read_sql_query("SELECT * FROM base_compras", conn)
     conn.close()
+    
     df['data_emissao'] = pd.to_datetime(df['data_emissao'])
-    if 'ncm' in df.columns:
-        df['ncm'] = df['ncm'].astype(str).str.replace('.', '', regex=False)
+    # Limpeza do NCM e Descrição
+    df['ncm'] = df['ncm'].astype(str).str.replace('.', '', regex=False)
+    df['desc_prod'] = df['desc_prod'].astype(str).str.upper().str.strip()
     return df
 
-df = carregar_dados()
+df_raw = carregar_dados()
 
-if df.empty:
+if df_raw.empty:
     st.stop()
 
-# --- 2. CÉREBRO DE COMPLIANCE (PESOS DE RISCO) ---
-def definir_risco_detalhado(row):
-    desc = str(row['desc_prod']).upper()
-    ncm = str(row.get('ncm', '0000'))
-    
-    if ncm.startswith(('2710', '3403', '3208', '3209', '3814')) or any(x in desc for x in ['OLEO', 'GRAXA', 'LUBRIFICANTE', 'TINTA']):
-        return '🔴 CRÍTICO - QUÍMICO', 'LO + CTF + FISPQ', 100
-    
-    if ncm.startswith(('4015', '4203', '6116', '6403', '6506', '9020')) or any(x in desc for x in ['LUVA', 'BOTA', 'CAPACETE', 'OCULOS', 'MASCARA']):
-        if not any(x in desc for x in ['ESGOTO', 'PVC', 'CONEXAO']):
-            return '🟠 CRÍTICO - EPI', 'CA Válido + NR-06', 50
-            
-    if ncm.startswith(('4009', '7307', '8481')) and any(x in desc for x in ['HIDRAULI', 'PRESSAO', 'MANGUEIRA']):
-        return '🟡 CRÍTICO - PRESSÃO', 'Teste Hidrostático + NR-12', 30
-        
-    return '🟢 GERAL', 'Cadastro Regular', 1
+# --- 2. INTELIGÊNCIA DE CATEGORIZAÇÃO (CRÍTICA E GERAL) ---
+def classificar_material(row):
+    desc = row['desc_prod']
+    ncm = row.get('ncm', '')
 
-# Processamento
-df_itens = df.groupby(['cod_prod', 'desc_prod', 'u_medida', 'ncm']).agg(
+    # --- LISTAS DE PALAVRAS CHAVE ---
+    termos_hidraulica = ['CONEXAO', 'VALVULA', 'TUBO', 'JOELHO', 'TE', 'NIPLE', 'ADAPTADOR', 'RED', 'LUVA RED', 'ROSCA', 'SOLDAVEL', 'PVC', 'COBRE', 'ESGOTO', 'ENGATE', 'ABRACADEIRA']
+    termos_eletrica = ['CABO', 'FIO', 'DISJUNTOR', 'LAMPADA', 'RELE', 'CONTATOR', 'TOMADA', 'PLUGUE', 'INTERRUPTOR', 'ELETRODUTO', 'TERMINAL']
+    termos_construcao = ['CIMENTO', 'AREIA', 'TIJOLO', 'BLOCO', 'ARGAMASSA', 'PISO', 'TINTA', 'VERNIZ', 'SELADOR']
+    termos_ferramenta = ['CHAVE', 'ALICATE', 'MARTELO', 'SERRA', 'DISCO', 'BROCA', 'FURADEIRA', 'LIXADEIRA', 'PARAFUSADEIRA']
+    termos_fixacao = ['PARAFUSO', 'PORCA', 'ARRUELA', 'CHUMBADOR', 'BARRA ROSCADA']
+    termos_epi = ['LUVA', 'BOTA', 'CAPACETE', 'OCULOS', 'PROTETOR', 'MASCARA', 'CINTO', 'TALABARTE']
+
+    # --- 1. CHECAGEM DE CRITICIDADE (Regras de Ouro) ---
+    
+    # REGRA EPI: Só é EPI se tiver palavras de EPI E NÃO tiver palavras de Hidráulica/Construção
+    # Ex: "LUVA RED" tem "LUVA" mas tem "RED", então NÃO é EPI.
+    eh_epi_potencial = any(t in desc for t in termos_epi) or ncm.startswith(('4015', '4203', '6116', '6403', '6506', '9020'))
+    tem_termo_tecnico = any(t in desc for t in termos_hidraulica + termos_eletrica + termos_fixacao)
+    
+    if eh_epi_potencial and not tem_termo_tecnico:
+        return '🟠 EPI (CRÍTICO)', 'CA Válido + Ficha Entrega'
+
+    # Químicos
+    if ncm.startswith(('2710', '3403', '3814')) or (any(x in desc for x in ['OLEO', 'GRAXA', 'LUBRIFICANTE', 'SOLVENTE', 'THINNER']) and 'ALIMENT' not in desc):
+        return '🔴 QUÍMICO (CRÍTICO)', 'FISPQ + LO + CTF'
+    
+    # Içamento / Pressão Crítica
+    if any(x in desc for x in ['CABO DE ACO', 'CINTA DE CARGA', 'MANILHA']):
+        return '🟡 IÇAMENTO (CRÍTICO)', 'Certificado Qualidade'
+
+    # --- 2. CATEGORIZAÇÃO GERAL (Se não foi Crítico) ---
+    
+    if ncm.startswith(('3917', '7307', '8481')) or any(t in desc for t in termos_hidraulica):
+        return '💧 HIDRÁULICA', 'Geral'
+        
+    if ncm.startswith(('8544', '8536', '8538')) or any(t in desc for t in termos_eletrica):
+        return '⚡ ELÉTRICA', 'Geral'
+    
+    if any(t in desc for t in termos_construcao):
+        return '🧱 CONSTRUÇÃO CIVIL', 'Geral'
+    
+    if ncm.startswith(('8202', '8203', '8204', '8205', '8207')) or any(t in desc for t in termos_ferramenta):
+        return '🔧 FERRAMENTAS', 'Geral'
+        
+    if ncm.startswith(('7318')) or any(t in desc for t in termos_fixacao):
+        return '🔩 FIXAÇÃO', 'Geral'
+
+    return '📦 OUTROS / GERAL', 'Geral'
+
+# Processamento Inteligente
+# Agrupamos por Produto para tirar a média e achar o fornecedor mais barato
+df_grouped = df_raw.groupby(['desc_prod', 'u_medida', 'ncm']).agg(
     Total_Gasto=('v_total_item', 'sum'),
-    Qtd_Total=('qtd', 'sum')
+    Qtd_Total=('qtd', 'sum'),
+    Media_Preco=('v_unit', 'mean'),
+    Menor_Preco=('v_unit', 'min'),
+    Maior_Preco=('v_unit', 'max'),
+    Ultima_Compra=('data_emissao', 'max')
 ).reset_index()
 
-df_itens[['Categoria', 'Exigencia', 'Peso_Risco']] = df_itens.apply(lambda r: pd.Series(definir_risco_detalhado(r)), axis=1)
+# Aplica a classificação
+df_grouped[['Categoria', 'Exigencia']] = df_grouped.apply(lambda x: pd.Series(classificar_material(x)), axis=1)
 
-# Ranking de Fornecedores por Risco
-df_merge = df.merge(df_itens[['desc_prod', 'ncm', 'Categoria', 'Peso_Risco']], on=['desc_prod', 'ncm'])
-df_ranking_forn = df_merge.groupby('nome_emit').agg(
-    Total_Financeiro=('v_total_item', 'sum'),
-    Qtd_Itens_Criticos=('Peso_Risco', lambda x: (x > 1).sum()),
-    Score_Risco=('Peso_Risco', 'sum')
-).reset_index().sort_values('Score_Risco', ascending=False)
+# Descobre QUEM vendeu o menor preço (Lookup)
+# Essa parte é pesada, fazemos um merge otimizado
+df_min_prices = df_raw.sort_values('v_unit', ascending=True).drop_duplicates(['desc_prod'])[['desc_prod', 'nome_emit']]
+df_grouped = df_grouped.merge(df_min_prices, on='desc_prod', how='left')
+df_grouped.rename(columns={'nome_emit': 'Forn_Menor_Preco'}, inplace=True)
 
-# --- 3. INTERFACE ---
-st.title("🛡️ Portal de Inteligência em Suprimentos")
-st.markdown("Monitoramento Estratégico de Vendor List e Compliance Técnico")
 
-# KPIs
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Gasto Total", f"R$ {df['v_total_item'].sum():,.2f}")
-m2.metric("Fornecedores Ativos", f"{df['cnpj_emit'].nunique()}")
-m3.metric("Itens Críticos", f"{len(df_itens[df_itens['Peso_Risco'] > 1])}")
-m4.metric("Itens Cadastrados", f"{len(df_itens)}")
+# --- INTERFACE ---
 
-st.markdown("---")
+st.title("🏗️ Portal de Compras & Inteligência")
 
-aba1, aba2, aba3 = st.tabs(["📊 Dashboard de Risco", "📋 Ficha de Qualificação", "🔎 Biblioteca de Itens"])
+# ABAS REORGANIZADAS PARA O FLUXO DE TRABALHO
+aba_busca, aba_dash, aba_vendor = st.tabs(["🔍 Busca de Preços (Histórico)", "📊 Dashboard Gerencial", "📋 Vendor List & Compliance"])
 
-with aba1:
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Gasto por Categoria de Risco")
-        df_pizza = df_itens.groupby('Categoria')['Total_Gasto'].sum().reset_index()
-        fig_p = px.pie(df_pizza, values='Total_Gasto', names='Categoria', 
-                     color_discrete_map={'🔴 CRÍTICO - QUÍMICO':'#dc2626', '🟠 CRÍTICO - EPI':'#f97316', '🟡 CRÍTICO - PRESSÃO':'#facc15', '🟢 GERAL':'#3b82f6'},
-                     hole=0.4)
-        st.plotly_chart(fig_p)
+# === ABA 1: BUSCA INTELIGENTE (O "GOOGLE" DO ESTOQUE) ===
+with aba_busca:
+    st.markdown("### 🔎 Pesquisa de Histórico de Compras")
+    
+    col1, col2, col3 = st.columns([2, 1, 1])
+    termo_busca = col1.text_input("O que você precisa comprar?", placeholder="Ex: Luva, Cabo 10mm, Parafuso...")
+    filtro_cat = col2.multiselect("Filtrar Categoria", sorted(df_grouped['Categoria'].unique()))
+    
+    # FILTRO REAL (ESCONDE O QUE NÃO É)
+    df_view = df_grouped.copy()
+    
+    if filtro_cat:
+        df_view = df_view[df_view['Categoria'].isin(filtro_cat)]
+    
+    if termo_busca:
+        # Busca inteligente (várias palavras)
+        palavras = termo_busca.upper().split()
+        for p in palavras:
+            df_view = df_view[df_view['desc_prod'].str.contains(p)]
 
-    with c2:
-        st.subheader("Top 10 Fornecedores (Índice de Risco)")
-        df_top = df_ranking_forn.head(10)
-        fig_r = px.bar(df_top, x='Score_Risco', y='nome_emit', orientation='h', labels={'Score_Risco': 'Risco Acumulado'})
-        fig_r.update_layout(yaxis={'categoryorder':'total ascending'})
-        st.plotly_chart(fig_r)
+    # Métrica Rápida da Busca
+    if termo_busca:
+        st.caption(f"Encontramos {len(df_view)} itens correspondentes.")
 
-with aba2:
-    st.subheader("Auditoria por Fornecedor")
-    fornecedor_sel = st.selectbox("Selecione o Fornecedor:", df_ranking_forn['nome_emit'])
-    row_rank = df_ranking_forn[df_ranking_forn['nome_emit'] == fornecedor_sel].iloc[0]
+    # Tabela Formatada e Limpa
+    st.dataframe(
+        df_view[['Categoria', 'desc_prod', 'u_medida', 'Menor_Preco', 'Media_Preco', 'Forn_Menor_Preco', 'Ultima_Compra']]
+        .sort_values('Ultima_Compra', ascending=False)
+        .style.format({
+            'Menor_Preco': format_brl,
+            'Media_Preco': format_brl,
+            'Ultima_Compra': '{:%d/%m/%Y}'
+        })
+        .map(lambda x: 'color: red; font-weight: bold' if 'CRÍTICO' in str(x) else '', subset=['Categoria']),
+        use_container_width=True,
+        height=600
+    )
+
+# === ABA 2: DASHBOARD ===
+with aba_dash:
+    # Cards Formatados
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Gasto (Histórico)", format_brl(df_raw['v_total_item'].sum()))
+    c2.metric("Fornecedores Ativos", df_raw['cnpj_emit'].nunique())
+    c3.metric("Itens Críticos", len(df_grouped[df_grouped['Categoria'].str.contains('CRÍTICO')]))
+    c4.metric("Total de Itens", len(df_grouped))
+
+    st.markdown("---")
+    
+    col_g1, col_g2 = st.columns(2)
+    
+    with col_g1:
+        st.subheader("Gastos por Categoria")
+        df_cat_sum = df_grouped.groupby('Categoria')['Total_Gasto'].sum().reset_index().sort_values('Total_Gasto', ascending=False)
+        fig_bar = px.bar(df_cat_sum, x='Total_Gasto', y='Categoria', orientation='h', text_auto='.2s')
+        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_bar, use_container_width=True)
+        
+    with col_g2:
+        st.subheader("Curva ABC (Top 10 Fornecedores)")
+        df_abc = df_raw.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index()
+        fig_pie = px.pie(df_abc, values='v_total_item', names='nome_emit', hole=0.4)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+# === ABA 3: VENDOR LIST & COMPLIANCE ===
+with aba_vendor:
+    st.subheader("Auditoria de Fornecedores")
+    
+    lista_forn = sorted(df_raw['nome_emit'].unique())
+    fornecedor_sel = st.selectbox("Selecione o Fornecedor:", lista_forn)
+    
+    # Dados do Fornecedor
+    dados_f = df_raw[df_raw['nome_emit'] == fornecedor_sel].iloc[0]
+    total_f = df_raw[df_raw['nome_emit'] == fornecedor_sel]['v_total_item'].sum()
+    
+    # Itens fornecidos por ele
+    itens_f = df_grouped[df_grouped['Forn_Menor_Preco'] == fornecedor_sel] # Simplificado para demo
+    # Pega todos os itens que ele já vendeu na base raw para ser mais preciso no risco
+    itens_raw_f = df_raw[df_raw['nome_emit'] == fornecedor_sel]['desc_prod'].unique()
+    riscos_f = df_grouped[df_grouped['desc_prod'].isin(itens_raw_f) & df_grouped['Categoria'].str.contains('CRÍTICO')]
     
     col_a, col_b = st.columns([1, 2])
-    with col_a:
-        st.info(f"**Resumo Financeiro**")
-        st.write(f"💰 Total: R$ {row_rank['Total_Financeiro']:,.2f}")
-        st.write(f"⚠️ Itens Críticos: {row_rank['Qtd_Itens_Criticos']}")
     
-    with col_b:
-        itens_f = df_merge[df_merge['nome_emit'] == fornecedor_sel]
-        itens_f_crit = itens_f[itens_f['Peso_Risco'] > 1].drop_duplicates('desc_prod')
-        if not itens_f_crit.empty:
-            st.warning("🚨 Este fornecedor exige auditoria de documentos (6.1.2).")
-            st.dataframe(itens_f_crit[['desc_prod', 'Categoria']], hide_index=True)
+    with col_a:
+        st.info("Ficha Cadastral")
+        st.write(f"**CNPJ:** {dados_f.get('cnpj_emit', 'N/A')}")
+        st.write(f"**Local:** {dados_f.get('xMun', '')} - {dados_f.get('uf_emit', '')}")
+        st.write(f"**Total Comprado:** {format_brl(total_f)}")
+        
+        if not riscos_f.empty:
+            st.error(f"🚨 FORNECEDOR CRÍTICO ({len(riscos_f)} itens)")
+            st.write("**Exigências:**")
+            for exig in riscos_f['Exigencia'].unique():
+                st.write(f"- {exig}")
         else:
-            st.success("✅ Fornecedor de Itens Gerais.")
-
-with aba3:
-    st.subheader("Biblioteca Geral de Materiais")
-    st.dataframe(
-        df_itens[['Categoria', 'desc_prod', 'ncm', 'Total_Gasto']]
-        .sort_values('Total_Gasto', ascending=False)
-        .style.format({'Total_Gasto': 'R$ {:.2f}'}),
-        height=500, use_container_width=True
-    )
+            st.success("✅ Fornecedor Geral (Sem risco identificado)")
+            
+    with col_b:
+        st.write("**Histórico de Itens Críticos deste Fornecedor:**")
+        if not riscos_f.empty:
+            st.dataframe(riscos_f[['desc_prod', 'Categoria', 'Exigencia']], use_container_width=True)
+        else:
+            st.write("Nenhum item crítico encontrado no histórico.")
