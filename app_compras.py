@@ -145,4 +145,69 @@ with aba_busca:
     st.dataframe(
         df_view[['Categoria', 'desc_prod', 'Menor_Preco_Historico', 'Preco_Ultima_Compra', 'Variacao_Preco', 'Forn_Ultima_Compra', 'NF_Ultima', 'Data_Ultima']]
         .sort_values('Data_Ultima', ascending=False)
-        .style.format({'Menor_Preco_Historico': format_brl, 'Preco_Ultima_Compra': format_brl, 'Variacao_Preco
+        .style.format({'Menor_Preco_Historico': format_brl, 'Preco_Ultima_Compra': format_brl, 'Variacao_Preco': format_perc, 'Data_Ultima': '{:%d/%m/%Y}'})
+        .map(lambda x: 'color: red; font-weight: bold' if x > 10 else ('color: green' if x == 0 else ''), subset=['Variacao_Preco']),
+        use_container_width=True, height=600
+    )
+
+# ABA 2: DASHBOARD
+with aba_dash:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Gasto", format_brl(df['v_total_item'].sum()))
+    c2.metric("Fornecedores", df['cnpj_emit'].nunique())
+    c3.metric("Itens Críticos", len(df_final[df_final['Categoria'].str.contains('CRÍTICO')]))
+    c4.metric("Notas Fiscais", df['n_nf'].nunique())
+
+    st.markdown("---")
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        st.subheader("Gastos por Categoria")
+        fig_bar = px.bar(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index().sort_values('Total_Gasto', ascending=False), 
+                         x='Total_Gasto', y='Categoria', orientation='h', text_auto='.2s')
+        st.plotly_chart(fig_bar, use_container_width=True)
+    with col_g2:
+        st.subheader("Top 10 Fornecedores")
+        fig_pie = px.pie(df.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index(), values='v_total_item', names='nome_emit', hole=0.4)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+# ABA 3: VENDOR LIST (AGORA MOSTRA TUDO)
+with aba_vendor:
+    st.subheader("Consulta de Fornecedor")
+    fornecedor_sel = st.selectbox("Selecione:", df.groupby('nome_emit')['v_total_item'].sum().sort_values(ascending=False).index)
+    
+    # 1. Busca TODOS os itens desse fornecedor (Independente de risco)
+    itens_do_fornecedor = df[df['nome_emit'] == fornecedor_sel]['desc_prod'].unique()
+    
+    # 2. Pega a classificação e dados da base consolidada
+    todos_itens_f = df_final[df_final['desc_prod'].isin(itens_do_fornecedor)].copy()
+    
+    # 3. Cria coluna auxiliar para ordenar (Críticos primeiro)
+    todos_itens_f['Risco'] = todos_itens_f['Categoria'].str.contains('CRÍTICO')
+    todos_itens_f = todos_itens_f.sort_values(['Risco', 'desc_prod'], ascending=[False, True])
+    
+    # 4. Dados Cadastrais e Alertas
+    dados_f = df[df['nome_emit'] == fornecedor_sel].iloc[0]
+    total_f = df[df['nome_emit'] == fornecedor_sel]['v_total_item'].sum()
+    riscos_f = todos_itens_f[todos_itens_f['Risco'] == True]
+    
+    col_a, col_b = st.columns([1, 2])
+    with col_a:
+        st.info("Dados Cadastrais")
+        st.write(f"**CNPJ:** {dados_f.get('cnpj_emit')}")
+        st.write(f"**Local:** {dados_f.get('xMun')}/{dados_f.get('uf_emit')}")
+        st.write(f"**Total Comprado:** {format_brl(total_f)}")
+        
+        if not riscos_f.empty:
+            st.error(f"🚨 FORNECEDOR CRÍTICO")
+            st.write(f"Identificamos {len(riscos_f)} itens de risco no mix de produtos.")
+        else:
+            st.success("✅ Fornecedor Geral")
+            
+    with col_b:
+        st.write(f"**Histórico Completo ({len(todos_itens_f)} itens fornecidos):**")
+        st.dataframe(
+            todos_itens_f[['desc_prod', 'Categoria', 'Exigencia']]
+            .style.map(lambda x: 'color: red; font-weight: bold' if 'CRÍTICO' in str(x) else '', subset=['Categoria']),
+            hide_index=True, 
+            use_container_width=True
+        )
