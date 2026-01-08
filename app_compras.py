@@ -194,4 +194,69 @@ with aba2:
         itens_do_fornecedor = df[df['nome_emit'] == fornecedor_sel]['desc_prod'].unique()
         todos_itens_f = df_final[df_final['desc_prod'].isin(itens_do_fornecedor)].copy()
         todos_itens_f['Risco'] = todos_itens_f['Categoria'].str.contains('CRÍTICO')
-        todos_itens_f = todos_itens_f.sort_values(['Risco', 'desc_
+        todos_itens_f = todos_itens_f.sort_values(['Risco', 'desc_prod'], ascending=[False, True])
+        
+        dados_f = df[df['nome_emit'] == fornecedor_sel].iloc[0]
+        total_f = df[df['nome_emit'] == fornecedor_sel]['v_total_item'].sum()
+        riscos_f = todos_itens_f[todos_itens_f['Risco'] == True]
+        
+        c_info, c_table = st.columns([1, 2])
+        
+        with c_info:
+            # HTML Puro para evitar CSS do Streamlit quebrar cor
+            st.markdown(f"""
+            <div style="background-color: white; color: black; padding: 20px; border-radius: 10px; border: 1px solid #ddd;">
+                <h3 style="color: #004280; margin: 0;">{fornecedor_sel}</h3>
+                <p><b>CNPJ:</b> {dados_f.get('cnpj_emit')}</p>
+                <p><b>Cidade:</b> {dados_f.get('xMun')}/{dados_f.get('uf_emit')}</p>
+                <hr>
+                <p style="font-size: 20px;"><b>Total:</b> {format_brl(total_f)}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.write("")
+            if not riscos_f.empty:
+                st.error(f"🚨 FORNECEDOR CRÍTICO")
+                st.write(f"Vende {len(riscos_f)} itens controlados.")
+            else:
+                st.success("✅ Fornecedor Geral")
+
+        with c_table:
+            st.write("Histórico de Vendas")
+            st.dataframe(
+                todos_itens_f[['desc_prod', 'Categoria', 'Exigencia']]
+                .style.map(lambda x: 'color: red; font-weight: bold' if 'CRÍTICO' in str(x) else '', subset=['Categoria']),
+                hide_index=True,
+                use_container_width=True,
+                height=400
+            )
+    else:
+        st.info("👆 Selecione um fornecedor para ver a ficha.")
+
+# === ABA 3: BUSCA ===
+with aba3:
+    st.subheader("Pesquisa de Preços")
+    
+    c_search, c_filter = st.columns([3, 1])
+    termo_busca = c_search.text_input("O que você procura?", placeholder="Ex: Luva...")
+    filtro_cat = c_filter.multiselect("Categoria", sorted(df_final['Categoria'].unique()))
+    
+    df_view = df_final.copy()
+    if filtro_cat: df_view = df_view[df_view['Categoria'].isin(filtro_cat)]
+    if termo_busca:
+        for p in termo_busca.upper().split():
+            df_view = df_view[df_view['desc_prod'].str.contains(p)]
+
+    st.dataframe(
+        df_view[['Categoria', 'desc_prod', 'Menor_Preco_Historico', 'Preco_Ultima_Compra', 'Variacao_Preco', 'Forn_Ultima_Compra', 'Data_Ultima']]
+        .sort_values('Data_Ultima', ascending=False)
+        .style.format({
+            'Menor_Preco_Historico': format_brl, 
+            'Preco_Ultima_Compra': format_brl, 
+            'Variacao_Preco': format_perc, 
+            'Data_Ultima': '{:%d/%m/%Y}'
+        })
+        .map(lambda x: 'color: #d9534f; font-weight: bold' if x > 10 else ('color: #5cb85c' if x == 0 else ''), subset=['Variacao_Preco']),
+        use_container_width=True, 
+        height=600
+    )
