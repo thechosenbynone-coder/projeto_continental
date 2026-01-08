@@ -4,59 +4,41 @@ import sqlite3
 import plotly.express as px
 import os
 
-# --- 1. CONFIGURAÇÃO VISUAL PREMIUM ---
-st.set_page_config(page_title="Gestão de Suprimentos Premium", page_icon="💎", layout="wide")
+# --- 1. CONFIGURAÇÃO VISUAL ---
+st.set_page_config(page_title="Gestão de Suprimentos V10", page_icon="💎", layout="wide")
 
-# CSS PERSONALIZADO (A MÁGICA DO DESIGN)
+# CSS "ANTI-BUG" (Força contraste e remove conflitos)
 st.markdown("""
     <style>
-    /* Fundo geral mais limpo */
-    .stApp {
-        background-color: #f8f9fa;
+    /* 1. Força o fundo claro e texto escuro globalmente */
+    [data-testid="stAppViewContainer"] {
+        background-color: #f5f7f9;
+        color: #000000 !important;
     }
     
-    /* Estilo dos CARDS (Métricas) */
+    /* 2. Garante que títulos e textos sejam pretos/cinza escuros */
+    h1, h2, h3, h4, h5, h6, p, span, div {
+        color: #262730 !important;
+    }
+    
+    /* 3. Estilo dos CARDS (Métricas) */
     div[data-testid="stMetric"] {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        padding: 15px 20px;
-        border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        text-align: center;
+        background-color: #ffffff !important;
+        border: 1px solid #d1d5db;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
-    [data-testid="stMetricLabel"] {
-        font-weight: bold;
-        color: #555;
-        font-size: 14px;
-    }
-    [data-testid="stMetricValue"] {
-        color: #004280;
-        font-size: 32px !important;
+    /* Ajuste específico para o valor da métrica ficar AZUL */
+    [data-testid="stMetricValue"] div {
+        color: #004280 !important; 
+        font-size: 28px !important;
         font-weight: 700;
     }
-
-    /* Estilo das Abas */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background-color: transparent;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #ffffff;
-        border-radius: 8px;
-        padding: 10px 20px;
-        border: 1px solid #e0e0e0;
-        font-weight: 600;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #004280 !important;
-        color: white !important;
-        border: none;
-    }
-
-    /* Tabelas mais bonitas */
+    
+    /* 4. Tabelas com fundo branco para leitura */
     .stDataFrame {
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
+        background-color: white;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -93,32 +75,30 @@ df_full = carregar_dados()
 if df_full.empty:
     st.stop()
 
-# --- 3. TOPO DO DASHBOARD (FILTRO MODERNO) ---
+# --- 3. TOPO E FILTROS ---
 col_logo, col_filtro = st.columns([1, 2])
 
 with col_logo:
     st.title("💎 Portal de Suprimentos")
-    st.markdown("**Controle de Vendor List & Compliance**")
 
 with col_filtro:
-    # FILTRO NO TOPO (Mais elegante que sidebar)
     anos_disponiveis = sorted(df_full['ano'].unique(), reverse=True)
-    st.write("📅 **Período de Análise:**")
+    st.write("**Período de Análise:**")
     anos_selecionados = st.multiselect(
-        "Selecione os anos:", 
+        "Selecione:", 
         options=anos_disponiveis, 
         default=anos_disponiveis,
-        label_visibility="collapsed" # Esconde o label padrão feio
+        label_visibility="collapsed"
     )
 
 if not anos_selecionados:
-    st.warning("👆 Por favor, selecione pelo menos um ano acima para começar.")
+    st.warning("👆 Selecione um ano acima.")
     st.stop()
 
 df = df_full[df_full['ano'].isin(anos_selecionados)].copy()
-st.markdown("---") # Linha separadora elegante
+st.markdown("---")
 
-# --- 4. INTELIGÊNCIA DE DADOS (Lógica Blindada V9) ---
+# --- 4. INTELIGÊNCIA (LÓGICA V9) ---
 def classificar_material(row):
     desc = row['desc_prod']
     ncm = row.get('ncm', '')
@@ -168,120 +148,50 @@ df_last.rename(columns={'v_unit': 'Preco_Ultima_Compra', 'nome_emit': 'Forn_Ulti
 df_final = df_grouped.merge(df_last, on=['desc_prod', 'ncm'], how='left')
 df_final['Variacao_Preco'] = ((df_final['Preco_Ultima_Compra'] - df_final['Menor_Preco_Historico']) / df_final['Menor_Preco_Historico']) * 100
 
-# --- 5. INTERFACE PRINCIPAL ---
+# --- 5. INTERFACE (ABAS PADRÃO PARA EVITAR BUG DE PULO) ---
 
 aba1, aba2, aba3 = st.tabs(["📊 Dashboard Executivo", "📋 Auditoria de Fornecedor", "🔍 Busca de Itens"])
 
-# === ABA 1: DASHBOARD (Cards Bonitos) ===
+# === ABA 1: DASHBOARD ===
 with aba1:
-    st.markdown("### 📈 Visão Geral da Operação")
-    
-    # KPIs em Cards
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Gasto Total", format_brl(df['v_total_item'].sum()))
-    k2.metric("Fornecedores Ativos", df['cnpj_emit'].nunique())
-    k3.metric("Itens Críticos (Mix)", len(df_final[df_final['Categoria'].str.contains('CRÍTICO')]))
-    k4.metric("Notas Processadas", df['n_nf'].nunique())
+    k2.metric("Fornecedores", df['cnpj_emit'].nunique())
+    k3.metric("Mix Crítico", len(df_final[df_final['Categoria'].str.contains('CRÍTICO')]))
+    k4.metric("Notas", df['n_nf'].nunique())
 
-    st.markdown("<br>", unsafe_allow_html=True) # Espaçamento
+    st.write("")
     
     col_charts_1, col_charts_2 = st.columns(2)
     with col_charts_1:
-        st.markdown("#### 🍩 Gasto por Categoria")
+        st.subheader("Gasto por Categoria")
         fig_cat = px.bar(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index().sort_values('Total_Gasto', ascending=True), 
                          x='Total_Gasto', y='Categoria', orientation='h', text_auto='.2s', color_discrete_sequence=['#004280'])
-        fig_cat.update_layout(plot_bgcolor="white", margin=dict(t=10,l=10,b=10,r=10))
         st.plotly_chart(fig_cat, use_container_width=True)
         
     with col_charts_2:
-        st.markdown("#### 🏆 Top 10 Fornecedores")
+        st.subheader("Top 10 Fornecedores")
         top_forn = df.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index()
         fig_pie = px.pie(top_forn, values='v_total_item', names='nome_emit', hole=0.5, color_discrete_sequence=px.colors.sequential.Blues_r)
         st.plotly_chart(fig_pie, use_container_width=True)
 
-# === ABA 2: VENDOR LIST (Clean e Funcional) ===
+# === ABA 2: VENDOR LIST ===
 with aba2:
-    st.markdown("### 🕵️ Auditoria Detalhada")
+    st.subheader("Auditoria Detalhada")
     
     lista_fornecedores = df.groupby('nome_emit')['v_total_item'].sum().sort_values(ascending=False).index.tolist()
     
-    # SELECTBOX SEM SELEÇÃO PRÉVIA (Index=None)
     fornecedor_sel = st.selectbox(
-        "Selecione um Fornecedor para auditar:", 
+        "Busque o Fornecedor:", 
         lista_fornecedores, 
         index=None, 
-        placeholder="Digite o nome do fornecedor..."
+        placeholder="Digite o nome..."
     )
     
     st.markdown("---")
 
     if fornecedor_sel:
-        # Lógica de Auditoria
         itens_do_fornecedor = df[df['nome_emit'] == fornecedor_sel]['desc_prod'].unique()
         todos_itens_f = df_final[df_final['desc_prod'].isin(itens_do_fornecedor)].copy()
         todos_itens_f['Risco'] = todos_itens_f['Categoria'].str.contains('CRÍTICO')
-        todos_itens_f = todos_itens_f.sort_values(['Risco', 'desc_prod'], ascending=[False, True])
-        
-        dados_f = df[df['nome_emit'] == fornecedor_sel].iloc[0]
-        total_f = df[df['nome_emit'] == fornecedor_sel]['v_total_item'].sum()
-        riscos_f = todos_itens_f[todos_itens_f['Risco'] == True]
-        
-        c_info, c_table = st.columns([1, 2])
-        
-        with c_info:
-            st.markdown(f"""
-            <div style="background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #ddd;">
-                <h3 style="color: #004280; margin-top: 0;">{fornecedor_sel}</h3>
-                <p><b>CNPJ:</b> {dados_f.get('cnpj_emit')}</p>
-                <p><b>Cidade:</b> {dados_f.get('xMun')}/{dados_f.get('uf_emit')}</p>
-                <hr>
-                <p style="font-size: 20px;"><b>Total:</b> {format_brl(total_f)}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.write("")
-            if not riscos_f.empty:
-                st.error(f"🚨 **ATENÇÃO:** Fornecedor Crítico")
-                st.write(f"Vende {len(riscos_f)} itens controlados.")
-            else:
-                st.success("✅ Fornecedor Geral (Baixo Risco)")
-
-        with c_table:
-            st.subheader("Histórico de Vendas")
-            st.dataframe(
-                todos_itens_f[['desc_prod', 'Categoria', 'Exigencia']]
-                .style.map(lambda x: 'color: red; font-weight: bold' if 'CRÍTICO' in str(x) else '', subset=['Categoria']),
-                hide_index=True,
-                use_container_width=True,
-                height=400
-            )
-    else:
-        st.info("👆 Selecione um fornecedor acima para ver a ficha completa.")
-
-# === ABA 3: BUSCA (Otimizada) ===
-with aba3:
-    st.markdown("### 🔎 Pesquisa Inteligente de Preços")
-    
-    c_search, c_filter = st.columns([3, 1])
-    termo_busca = c_search.text_input("O que você procura?", placeholder="Ex: Luva, Cabo, Parafuso...")
-    filtro_cat = c_filter.multiselect("Filtrar Categoria", sorted(df_final['Categoria'].unique()))
-    
-    df_view = df_final.copy()
-    if filtro_cat: df_view = df_view[df_view['Categoria'].isin(filtro_cat)]
-    if termo_busca:
-        for p in termo_busca.upper().split():
-            df_view = df_view[df_view['desc_prod'].str.contains(p)]
-
-    st.dataframe(
-        df_view[['Categoria', 'desc_prod', 'Menor_Preco_Historico', 'Preco_Ultima_Compra', 'Variacao_Preco', 'Forn_Ultima_Compra', 'Data_Ultima']]
-        .sort_values('Data_Ultima', ascending=False)
-        .style.format({
-            'Menor_Preco_Historico': format_brl, 
-            'Preco_Ultima_Compra': format_brl, 
-            'Variacao_Preco': format_perc, 
-            'Data_Ultima': '{:%d/%m/%Y}'
-        })
-        .map(lambda x: 'color: #d9534f; font-weight: bold' if x > 10 else ('color: #5cb85c' if x == 0 else ''), subset=['Variacao_Preco']),
-        use_container_width=True, 
-        height=600
-    )
+        todos_itens_f = todos_itens_f.sort_values(['Risco', 'desc_
