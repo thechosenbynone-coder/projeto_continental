@@ -4,32 +4,23 @@ import sqlite3
 import plotly.express as px
 import os
 
-# --- 1. CONFIGURAÇÃO (Modo Adaptativo) ---
+# --- 1. CONFIGURAÇÃO VISUAL ---
 st.set_page_config(page_title="Gestão de Suprimentos V11", page_icon="💎", layout="wide")
 
-# CSS QUE SE ADAPTA AO TEMA (DARK/LIGHT)
 st.markdown("""
     <style>
-    /* Estilo dos CARDS (Métricas) */
+    /* Estilo Adaptativo (Dark/Light) */
     div[data-testid="stMetric"] {
-        /* Usa a cor secundária do tema (cinza claro no Light, cinza escuro no Dark) */
         background-color: var(--secondary-background-color);
-        border: 1px solid var(--text-color); /* Borda sutil */
-        border-color: rgba(128, 128, 128, 0.2);
+        border: 1px solid rgba(128, 128, 128, 0.2);
         padding: 15px;
         border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    
-    /* Ajuste para o valor da métrica ficar destacado */
     [data-testid="stMetricValue"] {
         font-size: 26px !important;
         font-weight: 700;
-        /* Cor primária do Streamlit (vermelho padrão ou customizado) */
         color: var(--primary-color) !important;
     }
-    
-    /* Estilo do Cartão de Fornecedor (HTML) */
     .card-fornecedor {
         background-color: var(--secondary-background-color);
         padding: 20px;
@@ -49,26 +40,51 @@ def format_perc(valor):
     if pd.isna(valor): return "0%"
     return f"{valor:.1f}%"
 
-# --- 2. DADOS ---
+# --- 2. CARREGAMENTO DE DADOS (COM PROTEÇÃO) ---
 @st.cache_data
 def carregar_dados():
     db_path = "compras_suprimentos.db"
+    
+    # 1. Verifica se arquivo existe
     if not os.path.exists(db_path):
-        st.error("⚠️ Banco de dados não encontrado.")
+        st.error(f"⚠️ ERRO CRÍTICO: O arquivo '{db_path}' não foi encontrado no GitHub.")
+        st.info("Por favor, faça o upload do arquivo .db gerado pelo extrator.")
         return pd.DataFrame()
     
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT * FROM base_compras", conn)
-    conn.close()
-    
-    df['data_emissao'] = pd.to_datetime(df['data_emissao'])
-    df['ano'] = df['data_emissao'].dt.year
-    df['ncm'] = df['ncm'].astype(str).str.replace('.', '', regex=False)
-    df['desc_prod'] = df['desc_prod'].astype(str).str.upper().str.strip()
-    return df
+    try:
+        conn = sqlite3.connect(db_path)
+        
+        # 2. Verifica se a tabela existe antes de ler (Evita o Crash)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='base_compras';")
+        if cursor.fetchone() is None:
+            st.error("⚠️ ERRO: O arquivo de banco de dados existe, mas está vazio ou corrompido.")
+            st.info("Solução: Rode o extrator novamente no seu PC e suba o arquivo .db de novo.")
+            conn.close()
+            return pd.DataFrame()
+
+        df = pd.read_sql_query("SELECT * FROM base_compras", conn)
+        conn.close()
+        
+        if df.empty:
+            return pd.DataFrame()
+
+        df['data_emissao'] = pd.to_datetime(df['data_emissao'])
+        df['ano'] = df['data_emissao'].dt.year
+        df['ncm'] = df['ncm'].astype(str).str.replace('.', '', regex=False)
+        df['desc_prod'] = df['desc_prod'].astype(str).str.upper().str.strip()
+        return df
+        
+    except Exception as e:
+        st.error(f"Erro ao ler banco de dados: {e}")
+        return pd.DataFrame()
 
 df_full = carregar_dados()
-if df_full.empty: st.stop()
+
+# Se o DF estiver vazio (erro de carga), para o app aqui de forma limpa
+if df_full.empty:
+    st.warning("Aguardando upload correto da base de dados...")
+    st.stop()
 
 # --- 3. TOPO ---
 c1, c2 = st.columns([1, 2])
@@ -129,7 +145,7 @@ df_last.rename(columns={'v_unit': 'Preco_Ultima_Compra', 'nome_emit': 'Forn_Ulti
 df_final = df_grouped.merge(df_last, on=['desc_prod', 'ncm'], how='left')
 df_final['Variacao_Preco'] = ((df_final['Preco_Ultima_Compra'] - df_final['Menor_Preco_Historico']) / df_final['Menor_Preco_Historico']) * 100
 
-# --- 5. INTERFACE (SEM BUG DE ABAS) ---
+# --- 5. INTERFACE ---
 aba1, aba2, aba3 = st.tabs(["📊 Dashboard", "📋 Auditoria", "🔍 Busca"])
 
 # ABA 1
@@ -170,7 +186,6 @@ with aba2:
         
         ca, cb = st.columns([1, 2])
         with ca:
-            # HTML ADAPTATIVO (Usa classes do container em vez de style inline fixo)
             st.markdown(f"""
             <div class="card-fornecedor">
                 <h3>{fornecedor_sel}</h3>
