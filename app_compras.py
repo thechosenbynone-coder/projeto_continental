@@ -5,11 +5,10 @@ import plotly.express as px
 import os
 
 # --- 1. CONFIGURAÇÃO VISUAL ---
-st.set_page_config(page_title="Gestão de Suprimentos V11", page_icon="💎", layout="wide")
+st.set_page_config(page_title="Gestão de Suprimentos V12", page_icon="🏗️", layout="wide")
 
 st.markdown("""
     <style>
-    /* Estilo Adaptativo (Dark/Light) */
     div[data-testid="stMetric"] {
         background-color: var(--secondary-background-color);
         border: 1px solid rgba(128, 128, 128, 0.2);
@@ -40,34 +39,28 @@ def format_perc(valor):
     if pd.isna(valor): return "0%"
     return f"{valor:.1f}%"
 
-# --- 2. CARREGAMENTO DE DADOS (COM PROTEÇÃO) ---
+# --- 2. CARREGAMENTO (COM PROTEÇÃO) ---
 @st.cache_data
 def carregar_dados():
     db_path = "compras_suprimentos.db"
     
-    # 1. Verifica se arquivo existe
     if not os.path.exists(db_path):
-        st.error(f"⚠️ ERRO CRÍTICO: O arquivo '{db_path}' não foi encontrado no GitHub.")
-        st.info("Por favor, faça o upload do arquivo .db gerado pelo extrator.")
+        st.error(f"⚠️ ERRO: Arquivo '{db_path}' não encontrado no servidor.")
         return pd.DataFrame()
     
     try:
         conn = sqlite3.connect(db_path)
-        
-        # 2. Verifica se a tabela existe antes de ler (Evita o Crash)
+        # Verifica tabela
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='base_compras';")
         if cursor.fetchone() is None:
-            st.error("⚠️ ERRO: O arquivo de banco de dados existe, mas está vazio ou corrompido.")
-            st.info("Solução: Rode o extrator novamente no seu PC e suba o arquivo .db de novo.")
             conn.close()
             return pd.DataFrame()
 
         df = pd.read_sql_query("SELECT * FROM base_compras", conn)
         conn.close()
         
-        if df.empty:
-            return pd.DataFrame()
+        if df.empty: return pd.DataFrame()
 
         df['data_emissao'] = pd.to_datetime(df['data_emissao'])
         df['ano'] = df['data_emissao'].dt.year
@@ -75,15 +68,13 @@ def carregar_dados():
         df['desc_prod'] = df['desc_prod'].astype(str).str.upper().str.strip()
         return df
         
-    except Exception as e:
-        st.error(f"Erro ao ler banco de dados: {e}")
+    except Exception:
         return pd.DataFrame()
 
 df_full = carregar_dados()
 
-# Se o DF estiver vazio (erro de carga), para o app aqui de forma limpa
 if df_full.empty:
-    st.warning("Aguardando upload correto da base de dados...")
+    st.warning("⚠️ Base de dados vazia ou não carregada. Faça o upload do arquivo .db")
     st.stop()
 
 # --- 3. TOPO ---
@@ -98,38 +89,61 @@ if not sel: st.stop()
 df = df_full[df_full['ano'].isin(sel)].copy()
 st.divider()
 
-# --- 4. LÓGICA DE CLASSIFICAÇÃO ---
+# --- 4. LÓGICA DE CLASSIFICAÇÃO (CORRIGIDA PARA LUVA RED) ---
 def classificar_material(row):
     desc = row['desc_prod']
     ncm = row.get('ncm', '')
 
-    termos_anti_epi = ['REDUCAO', 'SOLDAVEL', 'ESGOTO', 'ROSCA', 'JOELHO', 'TE ', ' TÊ ', 'NIPLE', 'ADAPTADOR', 'CURVA', 'CONEXAO']
-    termos_hidraulica = termos_anti_epi + ['VALVULA', 'TUBO', 'PVC', 'COBRE', 'ABRACADEIRA', 'SIFAO', 'CAIXA D AGUA']
-    termos_eletrica = ['CABO', 'FIO', 'DISJUNTOR', 'LAMPADA', 'RELE', 'CONTATOR', 'TOMADA', 'PLUGUE', 'INTERRUPTOR', 'ELETRODUTO', 'TERMINAL', 'CANALETA']
+    # LISTA NEGRA DO EPI: Se tiver isso, NÃO É EPI de jeito nenhum
+    termos_anti_epi = [
+        'REDUCAO', 'RED ', 'RED.', ' R.R ', # Variações de Redução
+        'SOLDAVEL', 'ROSCA', 'NPT', 'BSP', 'BSP.', # Tipos de conexão
+        'JOELHO', 'TE ', ' TÊ ', 'NIPLE', 'ADAPTADOR', 'CURVA', 'CONEXAO', 'UNIAO',
+        'LBS', 'CLASSE', 'SCH', 'DN ', ' Ø', # Termos de pressão/medida técnica
+        'CARBONO', 'INOX', 'ACO ', 'AÇO ', 'GALVANIZAD', 'LATÃO', 'LATAO', 'COBRE', 'FERRO', # Metais
+        'ESGOTO', 'SIFAO', 'PLUVIAL'
+    ]
+    
+    # Listas Gerais
+    termos_hidraulica = termos_anti_epi + ['VALVULA', 'TUBO', 'PVC', 'ABRACADEIRA', 'CAIXA D AGUA', 'REGISTRO', 'COMPORTA']
+    termos_eletrica = ['CABO', 'FIO', 'DISJUNTOR', 'LAMPADA', 'RELE', 'CONTATOR', 'TOMADA', 'PLUGUE', 'INTERRUPTOR', 'ELETRODUTO', 'TERMINAL', 'CANALETA', 'PRENSA CABO']
     termos_construcao = ['CIMENTO', 'AREIA', 'TIJOLO', 'BLOCO', 'ARGAMASSA', 'PISO', 'TINTA', 'VERNIZ', 'SELADOR', 'CAL', 'TELHA']
     termos_ferramenta = ['CHAVE', 'ALICATE', 'MARTELO', 'SERRA', 'DISCO', 'BROCA', 'FURADEIRA', 'LIXADEIRA', 'PARAFUSADEIRA', 'TRENA']
-    termos_fixacao = ['PARAFUSO', 'PORCA', 'ARRUELA', 'CHUMBADOR', 'BARRA ROSCADA', 'PREGO', 'REBITE']
-    termos_epi_keyword = ['LUVA', 'BOTA', 'CAPACETE', 'OCULOS', 'PROTETOR', 'MASCARA', 'CINTO', 'TALABARTE', 'RESPIRADOR']
+    termos_fixacao = ['PARAFUSO', 'PORCA', 'ARRUELA', 'CHUMBADOR', 'BARRA ROSCADA', 'PREGO', 'REBITE', 'GRAMPO']
+    
+    # Palavras-chave de EPI Real
+    termos_epi_keyword = ['LUVA', 'BOTA', 'CAPACETE', 'OCULOS', 'PROTETOR', 'MASCARA', 'CINTO', 'TALABARTE', 'RESPIRADOR', 'AVENTAL', 'PERNEIRA']
 
+    # --- HIERARQUIA DE DECISÃO ---
+
+    # 1. Químicos (Risco Alto)
     if ncm.startswith(('2710', '3403', '3814', '3208', '3209')) or (any(x in desc for x in ['OLEO', 'GRAXA', 'LUBRIFICANTE', 'SOLVENTE', 'THINNER', 'ADESIVO']) and 'ALIMENT' not in desc):
         return '🔴 QUÍMICO (CRÍTICO)', 'FISPQ + LO + CTF'
+    
+    # 2. Içamento (Risco Alto)
     if any(x in desc for x in ['CABO DE ACO', 'CINTA DE CARGA', 'MANILHA', 'GANCHO', 'ESTROPO']):
         return '🟡 CABOS E CORRENTES (CRÍTICO)', 'Certificado Qualidade'
     
+    # 3. EPI (AGORA COM CHECAGEM DE BLOQUEIO RIGOROSA)
     eh_ncm_epi = ncm.startswith(('6116', '4015', '4203', '6403', '6506', '9020', '9004', '6307'))
     tem_termo_epi = any(t in desc for t in termos_epi_keyword)
+    
+    # O Pulo do Gato: Verifica se tem palavras de metal/hidráulica
     tem_termo_proibido = any(t in desc for t in termos_anti_epi)
 
     if (eh_ncm_epi or tem_termo_epi) and not tem_termo_proibido:
         return '🟠 EPI (CRÍTICO)', 'CA Válido + Ficha Entrega'
 
+    # 4. Classificação Geral
     if ncm.startswith(('3917', '7307', '8481')) or any(t in desc for t in termos_hidraulica): return '💧 HIDRÁULICA', 'Geral'
     if ncm.startswith(('8544', '8536', '8538', '9405')) or any(t in desc for t in termos_eletrica): return '⚡ ELÉTRICA', 'Geral'
     if ncm.startswith(('6810', '6907', '2523')) or any(t in desc for t in termos_construcao): return '🧱 CONSTRUÇÃO CIVIL', 'Geral'
     if ncm.startswith(('8202', '8203', '8204', '8205', '8207')) or any(t in desc for t in termos_ferramenta): return '🔧 FERRAMENTAS', 'Geral'
     if ncm.startswith(('7318')) or any(t in desc for t in termos_fixacao): return '🔩 FIXAÇÃO', 'Geral'
+    
     return '📦 OUTROS / GERAL', 'Geral'
 
+# --- PROCESSAMENTO ---
 df_grouped = df.groupby(['desc_prod', 'u_medida', 'ncm']).agg(
     Total_Gasto=('v_total_item', 'sum'),
     Qtd_Total=('qtd', 'sum'),
@@ -145,10 +159,9 @@ df_last.rename(columns={'v_unit': 'Preco_Ultima_Compra', 'nome_emit': 'Forn_Ulti
 df_final = df_grouped.merge(df_last, on=['desc_prod', 'ncm'], how='left')
 df_final['Variacao_Preco'] = ((df_final['Preco_Ultima_Compra'] - df_final['Menor_Preco_Historico']) / df_final['Menor_Preco_Historico']) * 100
 
-# --- 5. INTERFACE ---
+# --- INTERFACE ---
 aba1, aba2, aba3 = st.tabs(["📊 Dashboard", "📋 Auditoria", "🔍 Busca"])
 
-# ABA 1
 with aba1:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Gasto Total", format_brl(df['v_total_item'].sum()))
@@ -167,11 +180,9 @@ with aba1:
         fig_pie = px.pie(df.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index(), values='v_total_item', names='nome_emit', hole=0.5)
         st.plotly_chart(fig_pie, use_container_width=True)
 
-# ABA 2
 with aba2:
     lista_fornecedores = df.groupby('nome_emit')['v_total_item'].sum().sort_values(ascending=False).index.tolist()
     fornecedor_sel = st.selectbox("Selecione o Fornecedor:", lista_fornecedores, index=None, placeholder="Digite para buscar...")
-    
     st.markdown("---")
     
     if fornecedor_sel:
@@ -200,7 +211,6 @@ with aba2:
                 st.error(f"🚨 FORNECEDOR CRÍTICO ({len(riscos_f)} itens)")
             else:
                 st.success("✅ Fornecedor Geral")
-
         with cb:
             st.write("Histórico de Vendas:")
             st.dataframe(
@@ -209,7 +219,6 @@ with aba2:
                 hide_index=True, use_container_width=True, height=400
             )
 
-# ABA 3
 with aba3:
     c_s, c_f = st.columns([3, 1])
     termo = c_s.text_input("Buscar Item:", placeholder="Ex: Luva...")
