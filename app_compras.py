@@ -4,46 +4,43 @@ import sqlite3
 import plotly.express as px
 import os
 
-# --- 1. CONFIGURAÇÃO VISUAL ---
-st.set_page_config(page_title="Gestão de Suprimentos V10", page_icon="💎", layout="wide")
+# --- 1. CONFIGURAÇÃO (Modo Adaptativo) ---
+st.set_page_config(page_title="Gestão de Suprimentos V11", page_icon="💎", layout="wide")
 
-# CSS "ANTI-BUG" (Força contraste e remove conflitos)
+# CSS QUE SE ADAPTA AO TEMA (DARK/LIGHT)
 st.markdown("""
     <style>
-    /* 1. Força o fundo claro e texto escuro globalmente */
-    [data-testid="stAppViewContainer"] {
-        background-color: #f5f7f9;
-        color: #000000 !important;
-    }
-    
-    /* 2. Garante que títulos e textos sejam pretos/cinza escuros */
-    h1, h2, h3, h4, h5, h6, p, span, div {
-        color: #262730 !important;
-    }
-    
-    /* 3. Estilo dos CARDS (Métricas) */
+    /* Estilo dos CARDS (Métricas) */
     div[data-testid="stMetric"] {
-        background-color: #ffffff !important;
-        border: 1px solid #d1d5db;
+        /* Usa a cor secundária do tema (cinza claro no Light, cinza escuro no Dark) */
+        background-color: var(--secondary-background-color);
+        border: 1px solid var(--text-color); /* Borda sutil */
+        border-color: rgba(128, 128, 128, 0.2);
         padding: 15px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    /* Ajuste específico para o valor da métrica ficar AZUL */
-    [data-testid="stMetricValue"] div {
-        color: #004280 !important; 
-        font-size: 28px !important;
-        font-weight: 700;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     
-    /* 4. Tabelas com fundo branco para leitura */
-    .stDataFrame {
-        background-color: white;
+    /* Ajuste para o valor da métrica ficar destacado */
+    [data-testid="stMetricValue"] {
+        font-size: 26px !important;
+        font-weight: 700;
+        /* Cor primária do Streamlit (vermelho padrão ou customizado) */
+        color: var(--primary-color) !important;
+    }
+    
+    /* Estilo do Cartão de Fornecedor (HTML) */
+    .card-fornecedor {
+        background-color: var(--secondary-background-color);
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid rgba(128, 128, 128, 0.2);
+        margin-bottom: 20px;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNÇÕES UTILITÁRIAS ---
+# --- FUNÇÕES ---
 def format_brl(valor):
     if pd.isna(valor): return "R$ 0,00"
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -52,12 +49,12 @@ def format_perc(valor):
     if pd.isna(valor): return "0%"
     return f"{valor:.1f}%"
 
-# --- 2. CARREGAMENTO DE DADOS ---
+# --- 2. DADOS ---
 @st.cache_data
 def carregar_dados():
     db_path = "compras_suprimentos.db"
     if not os.path.exists(db_path):
-        st.error("⚠️ Banco de dados não encontrado. Rode o extrator primeiro.")
+        st.error("⚠️ Banco de dados não encontrado.")
         return pd.DataFrame()
     
     conn = sqlite3.connect(db_path)
@@ -71,34 +68,21 @@ def carregar_dados():
     return df
 
 df_full = carregar_dados()
+if df_full.empty: st.stop()
 
-if df_full.empty:
-    st.stop()
+# --- 3. TOPO ---
+c1, c2 = st.columns([1, 2])
+with c1: st.title("💎 Portal Suprimentos")
+with c2:
+    anos = sorted(df_full['ano'].unique(), reverse=True)
+    st.write("Período:")
+    sel = st.multiselect("Selecione:", anos, default=anos, label_visibility="collapsed")
 
-# --- 3. TOPO E FILTROS ---
-col_logo, col_filtro = st.columns([1, 2])
+if not sel: st.stop()
+df = df_full[df_full['ano'].isin(sel)].copy()
+st.divider()
 
-with col_logo:
-    st.title("💎 Portal de Suprimentos")
-
-with col_filtro:
-    anos_disponiveis = sorted(df_full['ano'].unique(), reverse=True)
-    st.write("**Período de Análise:**")
-    anos_selecionados = st.multiselect(
-        "Selecione:", 
-        options=anos_disponiveis, 
-        default=anos_disponiveis,
-        label_visibility="collapsed"
-    )
-
-if not anos_selecionados:
-    st.warning("👆 Selecione um ano acima.")
-    st.stop()
-
-df = df_full[df_full['ano'].isin(anos_selecionados)].copy()
-st.markdown("---")
-
-# --- 4. INTELIGÊNCIA (LÓGICA V9) ---
+# --- 4. LÓGICA DE CLASSIFICAÇÃO ---
 def classificar_material(row):
     desc = row['desc_prod']
     ncm = row.get('ncm', '')
@@ -111,13 +95,11 @@ def classificar_material(row):
     termos_fixacao = ['PARAFUSO', 'PORCA', 'ARRUELA', 'CHUMBADOR', 'BARRA ROSCADA', 'PREGO', 'REBITE']
     termos_epi_keyword = ['LUVA', 'BOTA', 'CAPACETE', 'OCULOS', 'PROTETOR', 'MASCARA', 'CINTO', 'TALABARTE', 'RESPIRADOR']
 
-    # 1. Químicos
     if ncm.startswith(('2710', '3403', '3814', '3208', '3209')) or (any(x in desc for x in ['OLEO', 'GRAXA', 'LUBRIFICANTE', 'SOLVENTE', 'THINNER', 'ADESIVO']) and 'ALIMENT' not in desc):
         return '🔴 QUÍMICO (CRÍTICO)', 'FISPQ + LO + CTF'
-    # 2. Içamento
     if any(x in desc for x in ['CABO DE ACO', 'CINTA DE CARGA', 'MANILHA', 'GANCHO', 'ESTROPO']):
         return '🟡 CABOS E CORRENTES (CRÍTICO)', 'Certificado Qualidade'
-    # 3. EPI
+    
     eh_ncm_epi = ncm.startswith(('6116', '4015', '4203', '6403', '6506', '9020', '9004', '6307'))
     tem_termo_epi = any(t in desc for t in termos_epi_keyword)
     tem_termo_proibido = any(t in desc for t in termos_anti_epi)
@@ -125,7 +107,6 @@ def classificar_material(row):
     if (eh_ncm_epi or tem_termo_epi) and not tem_termo_proibido:
         return '🟠 EPI (CRÍTICO)', 'CA Válido + Ficha Entrega'
 
-    # 4. Gerais
     if ncm.startswith(('3917', '7307', '8481')) or any(t in desc for t in termos_hidraulica): return '💧 HIDRÁULICA', 'Geral'
     if ncm.startswith(('8544', '8536', '8538', '9405')) or any(t in desc for t in termos_eletrica): return '⚡ ELÉTRICA', 'Geral'
     if ncm.startswith(('6810', '6907', '2523')) or any(t in desc for t in termos_construcao): return '🧱 CONSTRUÇÃO CIVIL', 'Geral'
@@ -148,48 +129,35 @@ df_last.rename(columns={'v_unit': 'Preco_Ultima_Compra', 'nome_emit': 'Forn_Ulti
 df_final = df_grouped.merge(df_last, on=['desc_prod', 'ncm'], how='left')
 df_final['Variacao_Preco'] = ((df_final['Preco_Ultima_Compra'] - df_final['Menor_Preco_Historico']) / df_final['Menor_Preco_Historico']) * 100
 
-# --- 5. INTERFACE (ABAS PADRÃO PARA EVITAR BUG DE PULO) ---
+# --- 5. INTERFACE (SEM BUG DE ABAS) ---
+aba1, aba2, aba3 = st.tabs(["📊 Dashboard", "📋 Auditoria", "🔍 Busca"])
 
-aba1, aba2, aba3 = st.tabs(["📊 Dashboard Executivo", "📋 Auditoria de Fornecedor", "🔍 Busca de Itens"])
-
-# === ABA 1: DASHBOARD ===
+# ABA 1
 with aba1:
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Gasto Total", format_brl(df['v_total_item'].sum()))
-    k2.metric("Fornecedores", df['cnpj_emit'].nunique())
-    k3.metric("Mix Crítico", len(df_final[df_final['Categoria'].str.contains('CRÍTICO')]))
-    k4.metric("Notas", df['n_nf'].nunique())
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Gasto Total", format_brl(df['v_total_item'].sum()))
+    c2.metric("Fornecedores", df['cnpj_emit'].nunique())
+    c3.metric("Mix Crítico", len(df_final[df_final['Categoria'].str.contains('CRÍTICO')]))
+    c4.metric("Notas", df['n_nf'].nunique())
 
-    st.write("")
-    
-    col_charts_1, col_charts_2 = st.columns(2)
-    with col_charts_1:
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
         st.subheader("Gasto por Categoria")
         fig_cat = px.bar(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index().sort_values('Total_Gasto', ascending=True), 
-                         x='Total_Gasto', y='Categoria', orientation='h', text_auto='.2s', color_discrete_sequence=['#004280'])
+                         x='Total_Gasto', y='Categoria', orientation='h', text_auto='.2s')
         st.plotly_chart(fig_cat, use_container_width=True)
-        
-    with col_charts_2:
-        st.subheader("Top 10 Fornecedores")
-        top_forn = df.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index()
-        fig_pie = px.pie(top_forn, values='v_total_item', names='nome_emit', hole=0.5, color_discrete_sequence=px.colors.sequential.Blues_r)
+    with col_g2:
+        st.subheader("Top Fornecedores")
+        fig_pie = px.pie(df.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index(), values='v_total_item', names='nome_emit', hole=0.5)
         st.plotly_chart(fig_pie, use_container_width=True)
 
-# === ABA 2: VENDOR LIST ===
+# ABA 2
 with aba2:
-    st.subheader("Auditoria Detalhada")
-    
     lista_fornecedores = df.groupby('nome_emit')['v_total_item'].sum().sort_values(ascending=False).index.tolist()
-    
-    fornecedor_sel = st.selectbox(
-        "Busque o Fornecedor:", 
-        lista_fornecedores, 
-        index=None, 
-        placeholder="Digite o nome..."
-    )
+    fornecedor_sel = st.selectbox("Selecione o Fornecedor:", lista_fornecedores, index=None, placeholder="Digite para buscar...")
     
     st.markdown("---")
-
+    
     if fornecedor_sel:
         itens_do_fornecedor = df[df['nome_emit'] == fornecedor_sel]['desc_prod'].unique()
         todos_itens_f = df_final[df_final['desc_prod'].isin(itens_do_fornecedor)].copy()
@@ -200,63 +168,47 @@ with aba2:
         total_f = df[df['nome_emit'] == fornecedor_sel]['v_total_item'].sum()
         riscos_f = todos_itens_f[todos_itens_f['Risco'] == True]
         
-        c_info, c_table = st.columns([1, 2])
-        
-        with c_info:
-            # HTML Puro para evitar CSS do Streamlit quebrar cor
+        ca, cb = st.columns([1, 2])
+        with ca:
+            # HTML ADAPTATIVO (Usa classes do container em vez de style inline fixo)
             st.markdown(f"""
-            <div style="background-color: white; color: black; padding: 20px; border-radius: 10px; border: 1px solid #ddd;">
-                <h3 style="color: #004280; margin: 0;">{fornecedor_sel}</h3>
+            <div class="card-fornecedor">
+                <h3>{fornecedor_sel}</h3>
                 <p><b>CNPJ:</b> {dados_f.get('cnpj_emit')}</p>
-                <p><b>Cidade:</b> {dados_f.get('xMun')}/{dados_f.get('uf_emit')}</p>
+                <p><b>Local:</b> {dados_f.get('xMun')}/{dados_f.get('uf_emit')}</p>
                 <hr>
-                <p style="font-size: 20px;"><b>Total:</b> {format_brl(total_f)}</p>
+                <h2>{format_brl(total_f)}</h2>
             </div>
             """, unsafe_allow_html=True)
             
-            st.write("")
             if not riscos_f.empty:
-                st.error(f"🚨 FORNECEDOR CRÍTICO")
-                st.write(f"Vende {len(riscos_f)} itens controlados.")
+                st.error(f"🚨 FORNECEDOR CRÍTICO ({len(riscos_f)} itens)")
             else:
                 st.success("✅ Fornecedor Geral")
 
-        with c_table:
-            st.write("Histórico de Vendas")
+        with cb:
+            st.write("Histórico de Vendas:")
             st.dataframe(
                 todos_itens_f[['desc_prod', 'Categoria', 'Exigencia']]
-                .style.map(lambda x: 'color: red; font-weight: bold' if 'CRÍTICO' in str(x) else '', subset=['Categoria']),
-                hide_index=True,
-                use_container_width=True,
-                height=400
+                .style.map(lambda x: 'color: #ff4b4b; font-weight: bold' if 'CRÍTICO' in str(x) else '', subset=['Categoria']),
+                hide_index=True, use_container_width=True, height=400
             )
-    else:
-        st.info("👆 Selecione um fornecedor para ver a ficha.")
 
-# === ABA 3: BUSCA ===
+# ABA 3
 with aba3:
-    st.subheader("Pesquisa de Preços")
+    c_s, c_f = st.columns([3, 1])
+    termo = c_s.text_input("Buscar Item:", placeholder="Ex: Luva...")
+    cat = c_f.multiselect("Categoria:", sorted(df_final['Categoria'].unique()))
     
-    c_search, c_filter = st.columns([3, 1])
-    termo_busca = c_search.text_input("O que você procura?", placeholder="Ex: Luva...")
-    filtro_cat = c_filter.multiselect("Categoria", sorted(df_final['Categoria'].unique()))
-    
-    df_view = df_final.copy()
-    if filtro_cat: df_view = df_view[df_view['Categoria'].isin(filtro_cat)]
-    if termo_busca:
-        for p in termo_busca.upper().split():
-            df_view = df_view[df_view['desc_prod'].str.contains(p)]
+    view = df_final.copy()
+    if cat: view = view[view['Categoria'].isin(cat)]
+    if termo:
+        for p in termo.upper().split(): view = view[view['desc_prod'].str.contains(p)]
 
     st.dataframe(
-        df_view[['Categoria', 'desc_prod', 'Menor_Preco_Historico', 'Preco_Ultima_Compra', 'Variacao_Preco', 'Forn_Ultima_Compra', 'Data_Ultima']]
+        view[['Categoria', 'desc_prod', 'Menor_Preco_Historico', 'Preco_Ultima_Compra', 'Variacao_Preco', 'Forn_Ultima_Compra', 'Data_Ultima']]
         .sort_values('Data_Ultima', ascending=False)
-        .style.format({
-            'Menor_Preco_Historico': format_brl, 
-            'Preco_Ultima_Compra': format_brl, 
-            'Variacao_Preco': format_perc, 
-            'Data_Ultima': '{:%d/%m/%Y}'
-        })
-        .map(lambda x: 'color: #d9534f; font-weight: bold' if x > 10 else ('color: #5cb85c' if x == 0 else ''), subset=['Variacao_Preco']),
-        use_container_width=True, 
-        height=600
+        .style.format({'Menor_Preco_Historico': format_brl, 'Preco_Ultima_Compra': format_brl, 'Variacao_Preco': format_perc, 'Data_Ultima': '{:%d/%m/%Y}'})
+        .map(lambda x: 'color: #ff4b4b; font-weight: bold' if x > 10 else ('color: #09ab3b' if x == 0 else ''), subset=['Variacao_Preco']),
+        use_container_width=True, height=600
     )
