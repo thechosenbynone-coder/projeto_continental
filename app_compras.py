@@ -4,35 +4,42 @@ import sqlite3
 import plotly.express as px
 import os
 
-# --- 1. CONFIGURAÇÃO DE SISTEMA (LAYOUT PROFISSIONAL) ---
-st.set_page_config(page_title="Sourcing Intelligence System", page_icon="🏗️", layout="wide")
+# --- 1. CONFIGURAÇÃO (MODO ADAPTATIVO & GUINDASTE 🏗️) ---
+st.set_page_config(page_title="Portal de Inteligência em Suprimentos", page_icon="🏗️", layout="wide")
 
 st.markdown("""
     <style>
-    /* UI de Sistema */
-    .main { background-color: #f8f9fa; }
-    
+    /* CSS Adaptativo que respeita o tema do usuário */
     div[data-testid="stMetric"] {
-        background-color: white;
+        background-color: var(--secondary-background-color);
         border-left: 5px solid #004280;
         padding: 15px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    
-    /* Tabelas compactas para densidade de informação */
-    .dataframe { font-size: 12px !important; }
-    
-    /* Cartões de Destaque */
-    .card-system {
-        background-color: white;
+    [data-testid="stMetricValue"] {
+        font-size: 24px !important;
+        font-weight: 700;
+        color: var(--primary-color) !important;
+    }
+    .card-fornecedor {
+        background-color: var(--secondary-background-color);
         padding: 20px;
-        border-radius: 8px;
-        border: 1px solid #ddd;
-        border-top: 3px solid #004280;
-        margin-bottom: 15px;
+        border-radius: 10px;
+        border: 1px solid rgba(128, 128, 128, 0.2);
+        margin-bottom: 20px;
     }
     </style>
     """, unsafe_allow_html=True)
+
+# --- FUNÇÕES DE FORMATAÇÃO ---
+def format_brl(valor):
+    if pd.isna(valor): return "R$ 0,00"
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def format_perc(valor):
+    if pd.isna(valor): return "0%"
+    return f"{valor:.1f}%"
 
 # --- 2. CARREGAMENTO DE DADOS ---
 @st.cache_data
@@ -54,35 +61,25 @@ def carregar_dados():
     except: return pd.DataFrame()
 
 df_full = carregar_dados()
-
 if df_full.empty:
-    st.error("⛔ SISTEMA OFFLINE: Base de dados não encontrada ou vazia.")
+    st.warning("⚠️ Base de dados não carregada. Verifique o arquivo compras_suprimentos.db")
     st.stop()
 
-# --- 3. SIDEBAR DE CONTROLE (SISTEMA TEM MENU LATERAL) ---
+# --- 3. FILTROS GLOBAIS (SIDEBAR) ---
 with st.sidebar:
-    st.title("🎛️ Filtros Globais")
+    st.title("🎛️ Painel de Controle")
     anos = sorted(df_full['ano'].unique(), reverse=True)
-    sel_anos = st.multiselect("Ano Fiscal:", anos, default=anos)
-    
-    # Filtro de UF (Novo)
+    sel_anos = st.multiselect("Anos:", anos, default=anos)
     ufs = sorted(df_full['uf_emit'].dropna().unique())
-    sel_uf = st.multiselect("Estado (UF):", ufs, default=ufs)
-    
-    st.markdown("---")
-    st.caption("Versão Sistema: v17.0.1")
+    sel_uf = st.multiselect("Estados (UF):", ufs, default=ufs)
 
 if not sel_anos: st.stop()
+df = df_full[(df_full['ano'].isin(sel_anos)) & (df_full['uf_emit'].isin(sel_uf))].copy()
 
-# Aplica filtros globais
-df = df_full[df_full['ano'].isin(sel_anos)].copy()
-if sel_uf: df = df[df['uf_emit'].isin(sel_uf)]
-
-# --- 4. CLASSIFICAÇÃO (CORE BUSINESS LOGIC) ---
+# --- 4. LÓGICA DE CATEGORIZAÇÃO (V12 CORRIGIDA) ---
 def classificar_material(row):
     desc = row['desc_prod']
     ncm = row.get('ncm', '')
-
     termos_anti_epi = ['REDUCAO', 'RED ', 'RED.', ' R.R ', 'SOLDAVEL', 'ROSCA', 'NPT', 'BSP', 'JOELHO', 'TE ', ' TÊ ', 'NIPLE', 'ADAPTADOR', 'CURVA', 'CONEXAO', 'UNIAO', 'LBS', 'CLASSE', 'SCH', 'DN ', ' Ø', 'CARBONO', 'INOX', 'ACO ', 'AÇO ', 'GALVANIZAD', 'LATÃO', 'LATAO', 'COBRE', 'FERRO', 'ESGOTO', 'SIFAO', 'PLUVIAL']
     termos_hidraulica = termos_anti_epi + ['VALVULA', 'TUBO', 'PVC', 'ABRACADEIRA', 'CAIXA D AGUA', 'REGISTRO']
     termos_eletrica = ['CABO', 'FIO', 'DISJUNTOR', 'LAMPADA', 'RELE', 'CONTATOR', 'TOMADA', 'PLUGUE', 'INTERRUPTOR', 'ELETRODUTO', 'TERMINAL', 'CANALETA']
@@ -91,16 +88,16 @@ def classificar_material(row):
     termos_epi_keyword = ['LUVA', 'BOTA', 'CAPACETE', 'OCULOS', 'PROTETOR', 'MASCARA', 'CINTO', 'TALABARTE', 'RESPIRADOR']
 
     if ncm.startswith(('2710', '3403', '3814')) or (any(x in desc for x in ['OLEO', 'GRAXA', 'LUBRIFICANTE', 'SOLVENTE', 'THINNER']) and 'ALIMENT' not in desc):
-        return '🔴 QUÍMICO', 'FISPQ/CTF'
+        return '🔴 QUÍMICO (CRÍTICO)', 'FISPQ/LO/CTF'
     if any(x in desc for x in ['CABO DE ACO', 'CINTA DE CARGA', 'MANILHA', 'GANCHO', 'ESTROPO']):
-        return '🟡 IÇAMENTO', 'Certificado'
+        return '🟡 IÇAMENTO (CRÍTICO)', 'Certificado'
     
     eh_ncm_epi = ncm.startswith(('6116', '4015', '4203', '6403', '6506', '9020', '9004', '6307'))
     tem_termo_epi = any(t in desc for t in termos_epi_keyword)
     tem_termo_proibido = any(t in desc for t in termos_anti_epi)
 
     if (eh_ncm_epi or tem_termo_epi) and not tem_termo_proibido:
-        return '🟠 EPI', 'CA/Ficha'
+        return '🟠 EPI (CRÍTICO)', 'CA Válido'
 
     if ncm.startswith(('3917', '7307', '8481')) or any(t in desc for t in termos_hidraulica): return '💧 HIDRÁULICA', 'Geral'
     if ncm.startswith(('8544', '8536', '8538', '9405')) or any(t in desc for t in termos_eletrica): return '⚡ ELÉTRICA', 'Geral'
@@ -108,131 +105,118 @@ def classificar_material(row):
     if ncm.startswith(('8202', '8203', '8204', '8205', '8207')) or any(t in desc for t in termos_ferramenta): return '🔧 FERRAMENTAS', 'Geral'
     return '📦 GERAL', 'Geral'
 
-def format_brl(valor): return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-def format_perc(valor): return f"{valor:.1f}%"
-
-# Processamento de Dados (ETL em memória)
+# --- 5. PROCESSAMENTO ETL ---
 df_grouped = df.groupby(['desc_prod', 'u_medida', 'ncm']).agg(
     Total_Gasto=('v_total_item', 'sum'),
     Qtd_Total=('qtd', 'sum'),
     Menor_Preco_Historico=('v_unit', 'min'),
-    Maior_Preco_Historico=('v_unit', 'max'),
-    Media_Preco=('v_unit', 'mean')
 ).reset_index()
 
 df_grouped[['Categoria', 'Exigencia']] = df_grouped.apply(lambda x: pd.Series(classificar_material(x)), axis=1)
 df_sorted = df.sort_values('data_emissao', ascending=False)
 df_last = df_sorted.drop_duplicates(['desc_prod', 'ncm'])[['desc_prod', 'ncm', 'v_unit', 'nome_emit', 'n_nf', 'data_emissao']]
-df_last.rename(columns={'v_unit': 'Ultimo_Preco', 'nome_emit': 'Ultimo_Forn', 'n_nf': 'Ultima_NF', 'data_emissao': 'Ultima_Data'}, inplace=True)
+df_last.rename(columns={'v_unit': 'Preco_Ultima', 'nome_emit': 'Forn_Ultimo', 'n_nf': 'NF_Ultima', 'data_emissao': 'Data_Ultima'}, inplace=True)
 df_final = df_grouped.merge(df_last, on=['desc_prod', 'ncm'], how='left')
-df_final['Var_Preco'] = ((df_final['Ultimo_Preco'] - df_final['Menor_Preco_Historico']) / df_final['Menor_Preco_Historico']) * 100
-df_final['Saving_Potencial'] = df_final['Total_Gasto'] - (df_final['Menor_Preco_Historico'] * df_final['Qtd_Total'])
+df_final['Variacao_Preco'] = ((df_final['Preco_Ultima'] - df_final['Menor_Preco_Historico']) / df_final['Menor_Preco_Historico']) * 100
+saving_potencial = df_final['Total_Gasto'].sum() - (df_final['Menor_Preco_Historico'] * df_final['Qtd_Total']).sum()
 
-# --- 5. INTERFACE DO SISTEMA ---
-st.title("🏗️ Sourcing Intelligence System")
-st.markdown("---")
+# --- 6. INTERFACE ---
+st.title("🏗️ Portal de Inteligência em Suprimentos")
+st.divider()
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Executive View", "⚖️ Comparador (Bid)", "📋 Vendor Management", "🔎 Item Search"])
+aba1, aba2, aba3, aba4 = st.tabs(["📊 Dashboard Executivo", "📋 Auditoria & Cadastro", "⚖️ Comparador de Preços", "🔍 Busca de Materiais"])
 
-# ABA 1: VISÃO EXECUTIVA
-with tab1:
+# ABA 1: DASHBOARD (Recuperado)
+with aba1:
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Spend Total", format_brl(df['v_total_item'].sum()))
     k2.metric("Fornecedores", df['cnpj_emit'].nunique())
-    k3.metric("Saving Perdido", format_brl(df_final['Saving_Potencial'].sum()), delta_color="inverse")
-    k4.metric("Itens Críticos", len(df_final[df_final['Categoria'].isin(['🟠 EPI', '🔴 QUÍMICO', '🟡 IÇAMENTO'])]))
+    k3.metric("Saving Potencial", format_brl(saving_potencial))
+    k4.metric("Itens Críticos", len(df_final[df_final['Categoria'].str.contains('CRÍTICO')]))
 
-    col_chart1, col_chart2 = st.columns([2, 1])
-    with col_chart1:
-        st.subheader("Spend Analysis (Tempo)")
-        fig = px.area(df.groupby('mes_ano')['v_total_item'].sum().reset_index(), x='mes_ano', y='v_total_item', markers=True)
-        st.plotly_chart(fig, use_container_width=True)
-    with col_chart2:
+    st.subheader("Evolução Mensal de Compras")
+    fig_line = px.line(df.groupby('mes_ano')['v_total_item'].sum().reset_index().sort_values('mes_ano'), 
+                       x='mes_ano', y='v_total_item', markers=True, color_discrete_sequence=['#004280'])
+    fig_line.update_traces(hovertemplate='Mês: %{x}<br>Gasto: R$ %{y:,.2f}')
+    st.plotly_chart(fig_line, use_container_width=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Curva ABC (Fornecedores)")
+        fig_abc = px.bar(df.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index(), x='v_total_item', y='nome_emit', orientation='h', text_auto='.2s')
+        fig_abc.update_layout(xaxis_title="Total Gasto (R$)", yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_abc, use_container_width=True)
+    with c2:
         st.subheader("Share por Categoria")
-        fig2 = px.pie(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index(), values='Total_Gasto', names='Categoria', hole=0.6)
-        st.plotly_chart(fig2, use_container_width=True)
+        fig_pie = px.pie(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index(), values='Total_Gasto', names='Categoria', hole=0.4)
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-# ABA 2: COMPARADOR (NOVA FUNCIONALIDADE DE SISTEMA)
-with tab2:
-    st.markdown("### ⚖️ Comparativo de Concorrência")
-    st.info("Selecione um item para ver a variação de preço entre diferentes fornecedores ao longo do tempo.")
-    
-    # Selectbox de Itens
-    itens_lista = df_final.sort_values('Total_Gasto', ascending=False)['desc_prod'].unique()
-    item_bid = st.selectbox("Selecione o Item para Comparar:", itens_lista, index=0)
-    
-    if item_bid:
-        # Dados específicos do item
-        df_item = df[df['desc_prod'] == item_bid].copy()
-        
-        # Estatísticas do Item
-        c_min, c_med, c_max = st.columns(3)
-        stats = df_item['v_unit'].describe()
-        c_min.metric("Melhor Preço Pago", format_brl(stats['min']))
-        c_med.metric("Preço Médio", format_brl(stats['mean']))
-        c_max.metric("Pior Preço Pago", format_brl(stats['max']))
-        
-        # GRÁFICO DE DISPERSÃO (COMPARATIVO VISUAL)
-        st.markdown("#### Dispersão de Preços por Fornecedor")
-        fig_scatter = px.scatter(df_item, x='data_emissao', y='v_unit', color='nome_emit', 
-                                 size='qtd', hover_data=['n_nf'],
-                                 labels={'v_unit': 'Preço Unitário', 'data_emissao': 'Data Compra', 'nome_emit': 'Fornecedor'},
-                                 title=f"Histórico de Preços: {item_bid}")
-        st.plotly_chart(fig_scatter, use_container_width=True)
-        
-        # Tabela Comparativa
-        st.markdown("#### Tabela Detalhada")
-        st.dataframe(df_item[['data_emissao', 'nome_emit', 'n_nf', 'qtd', 'v_unit', 'v_total_item']].sort_values('v_unit'), use_container_width=True)
-
-# ABA 3: VENDOR MANAGEMENT
-with tab3:
-    col_sel, col_btn = st.columns([3, 1])
-    forn_sel = col_sel.selectbox("Gestão de Fornecedor:", df.groupby('nome_emit')['v_total_item'].sum().sort_values(ascending=False).index)
-    
+# ABA 2: AUDITORIA (Recuperada com Endereço)
+with aba2:
+    lista_f = df.groupby('nome_emit')['v_total_item'].sum().sort_values(ascending=False).index.tolist()
+    forn_sel = st.selectbox("Selecione o Fornecedor:", lista_f, index=None, placeholder="Digite para buscar...")
     if forn_sel:
         dados_f = df[df['nome_emit'] == forn_sel].iloc[0]
         total_f = df[df['nome_emit'] == forn_sel]['v_total_item'].sum()
+        mix_f = df_final[df_final['desc_prod'].isin(df[df['nome_emit'] == forn_sel]['desc_prod'].unique())].copy()
+        mix_f = mix_f.sort_values(by=['Categoria', 'desc_prod'], ascending=[True, True])
         
-        # Layout de "Ficha de Cadastro"
-        st.markdown(f"""
-        <div class="card-system">
-            <h3>🏢 {forn_sel}</h3>
-            <p><b>CNPJ:</b> {dados_f['cnpj_emit']} &nbsp;|&nbsp; <b>Local:</b> {dados_f['xMun']}/{dados_f['uf_emit']}</p>
-            <p><b>Endereço:</b> {dados_f['xLgr']}, {dados_f['nro']} - {dados_f['xBairro']}</p>
-            <hr>
-            <h2>Volume Total: {format_brl(total_f)}</h2>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Produtos fornecidos
-        st.subheader("Mix de Produtos")
-        mix = df[df['nome_emit'] == forn_sel].groupby(['desc_prod', 'ncm']).agg(
-            Qtd=('qtd', 'sum'),
-            Media_Preco=('v_unit', 'mean'),
-            Ultima_Venda=('data_emissao', 'max')
-        ).reset_index()
-        st.dataframe(mix, use_container_width=True)
-        
-        # Botão de Exportação (Simulado)
-        st.download_button(
-            label="📥 Baixar Ficha do Fornecedor (CSV)",
-            data=mix.to_csv(index=False).encode('utf-8'),
-            file_name=f"ficha_{forn_sel.replace(' ', '_')}.csv",
-            mime='text/csv',
-        )
+        ca, cb = st.columns([1, 2])
+        with ca:
+            st.markdown(f"""
+            <div class="card-fornecedor">
+                <h3 style="margin:0; color:#004280;">{forn_sel}</h3>
+                <p style="font-size:12px;">CNPJ: {dados_f['cnpj_emit']}</p>
+                <hr>
+                <p><b>📍 Endereço:</b><br>{dados_f.get('xLgr','')}, {dados_f.get('nro','')}<br>{dados_f.get('xBairro','')}<br>{dados_f.get('xMun','')}/{dados_f.get('uf_emit','')} - CEP: {dados_f.get('cep','')}</p>
+                <hr>
+                <h2 style="color:#004280;">{format_brl(total_f)}</h2>
+            </div>
+            """, unsafe_allow_html=True)
+            if any("CRÍTICO" in x for x in mix_f['Categoria']): st.error("🚨 Fornecedor fornece itens Críticos!")
+            else: st.success("✅ Fornecedor Geral")
+        with cb:
+            st.write("Mix Fornecido:")
+            st.dataframe(mix_f[['desc_prod', 'Categoria', 'Exigencia']].style.map(lambda x: 'color:#ff4b4b;font-weight:bold' if 'CRÍTICO' in str(x) else '', subset=['Categoria']), hide_index=True, use_container_width=True, height=450)
 
-# ABA 4: BUSCA GERAL
-with tab4:
-    col_search, col_filter = st.columns([3, 1])
-    termo = col_search.text_input("Pesquisa Global:", placeholder="Digite NCM, Nome, Código...")
+# ABA 3: COMPARADOR (Formatado com Moeda)
+with aba3:
+    st.markdown("### ⚖️ Comparador Histórico de Concorrência")
+    item_sel = st.selectbox("Escolha um material para analisar:", df_final.sort_values('Total_Gasto', ascending=False)['desc_prod'].unique())
+    if item_sel:
+        df_item = df[df['desc_prod'] == item_sel].copy()
+        
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("Melhor Preço", format_brl(df_item['v_unit'].min()))
+        col_m2.metric("Preço Médio", format_brl(df_item['v_unit'].mean()))
+        col_m3.metric("Último Preço", format_brl(df_item['v_unit'].iloc[0]))
+        
+        fig_scatter = px.scatter(df_item, x='data_emissao', y='v_unit', color='nome_emit', size='qtd',
+                                 labels={'v_unit': 'Preço Unitário (R$)', 'data_emissao': 'Data Compra', 'nome_emit': 'Fornecedor'},
+                                 title=f"Dispersão de Preços: {item_sel}")
+        fig_scatter.update_layout(yaxis_tickformat="R$ ,.2f")
+        st.plotly_chart(fig_scatter, use_container_width=True)
+        
+        st.write("Histórico Completo do Item:")
+        st.dataframe(df_item[['data_emissao', 'nome_emit', 'n_nf', 'qtd', 'v_unit', 'v_total_item']].sort_values('data_emissao', ascending=False)
+                     .style.format({'data_emissao': '{:%d/%m/%Y}', 'v_unit': format_brl, 'v_total_item': format_brl}), hide_index=True, use_container_width=True)
+
+# ABA 4: BUSCA (Variação de Preço de volta)
+with aba3: # Note: st.tabs order
+    pass # Already defined above
+
+with aba4:
+    st.markdown("### 🔍 Busca de Materiais & Raio-X")
+    t_busca = st.text_input("Filtrar por nome ou NCM:", placeholder="Ex: LUVA RASPA...")
     
     view = df_final.copy()
-    if termo:
-        view = view[view['desc_prod'].str.contains(termo.upper()) | view['ncm'].str.contains(termo)]
+    if t_busca:
+        for p in t_busca.upper().split(): view = view[view['desc_prod'].str.contains(p)]
 
     st.dataframe(
-        view[['Categoria', 'desc_prod', 'Menor_Preco_Historico', 'Ultimo_Preco', 'Ultimo_Forn', 'Ultima_Data']]
-        .sort_values('Ultima_Data', ascending=False)
-        .style.format({'Menor_Preco_Historico': format_brl, 'Ultimo_Preco': format_brl, 'Ultima_Data': '{:%d/%m/%Y}'}),
-        use_container_width=True, height=600
+        view[['Categoria', 'desc_prod', 'Menor_Preco_Historico', 'Preco_Ultima', 'Variacao_Preco', 'Forn_Ultimo', 'NF_Ultima', 'Data_Ultima']]
+        .sort_values('Data_Ultima', ascending=False)
+        .style.format({'Menor_Preco_Historico': format_brl, 'Preco_Ultima': format_brl, 'Variacao_Preco': format_perc, 'Data_Ultima': '{:%d/%m/%Y}'})
+        .map(lambda x: 'color: #ff4b4b; font-weight: bold' if x > 10 else ('color: #09ab3b' if x == 0 else ''), subset=['Variacao_Preco']),
+        use_container_width=True, height=500
     )
