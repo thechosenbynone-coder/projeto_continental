@@ -5,7 +5,7 @@ import plotly.express as px
 import os
 
 # =====================================================
-# 1. CONFIGURAÇÃO & DESIGN (V24 - CLEAN UI)
+# 1. CONFIGURAÇÃO & DESIGN (V25 - DASHBOARD COMPLETO)
 # =====================================================
 st.set_page_config(
     page_title="Portal de Inteligência em Suprimentos",
@@ -33,20 +33,20 @@ st.markdown("""
         color: var(--primary-color) !important;
     }
 
-    /* Cartão de Fornecedor (Ficha Cadastral) */
+    /* Cartão de Fornecedor */
     .card-fornecedor {
         background-color: var(--secondary-background-color);
         padding: 25px;
         border-radius: 12px;
         border: 1px solid rgba(128,128,128,0.2);
         margin-bottom: 20px;
-        border-top: 5px solid #004280; /* Destaque no topo */
+        border-top: 5px solid #004280;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # =====================================================
-# 2. FUNÇÕES FORMATADORAS (Padrão BR R$ 1.000,00)
+# 2. FUNÇÕES FORMATADORAS
 # =====================================================
 def format_brl(v):
     if pd.isna(v): return "R$ 0,00"
@@ -83,16 +83,13 @@ if df_full.empty:
     st.stop()
 
 # =====================================================
-# 4. FILTROS (PILLS EM ORDEM CRONOLÓGICA) 🎈
+# 4. FILTROS (PILLS EM ORDEM)
 # =====================================================
 st.title("🏗️ Portal de Inteligência em Suprimentos")
 
 with st.container():
     st.write("##### 📅 Período de Análise")
-    
-    # CORREÇÃO AQUI: Ordem crescente (sorted sem reverse)
-    anos_disponiveis = sorted(df_full['ano'].unique()) 
-    
+    anos_disponiveis = sorted(df_full['ano'].unique())
     sel_anos = st.pills(
         "Selecione os anos fiscais:",
         options=anos_disponiveis,
@@ -162,28 +159,44 @@ tab1, tab2, tab3, tab4 = st.tabs([
 
 # --- TAB 1: DASHBOARD ---
 with tab1:
+    # 1. KPIs
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Gasto Total (Spend)", format_brl(df['v_total_item'].sum()))
     c2.metric("Fornecedores Ativos", df['cnpj_emit'].nunique())
     c3.metric("Risco Compliance", format_brl(spend_critico), delta="Itens Críticos") 
     c4.metric("Saving Potencial", format_brl(df_final['Saving_Potencial'].sum()), help="Economia se tivéssemos pago sempre o menor preço histórico.")
 
+    # 2. Evolução
     st.subheader("Evolução Financeira")
     fig_line = px.line(df.groupby('mes_ano')['v_total_item'].sum().reset_index(), x='mes_ano', y='v_total_item', markers=True)
     fig_line.update_layout(yaxis_tickformat="R$ ,.2f", xaxis_title="Mês", yaxis_title="Valor Gasto")
     st.plotly_chart(fig_line, use_container_width=True)
 
-    c_abc, c_cat = st.columns(2)
-    with c_abc:
-        st.subheader("Curva ABC (Top 10 Fornecedores)")
+    # 3. TOP FORNECEDORES & TOP MATERIAIS (Lado a Lado)
+    st.markdown("---")
+    col_abc_forn, col_abc_mat = st.columns(2)
+    
+    with col_abc_forn:
+        st.subheader("🏆 Top 10 Fornecedores (R$)")
         top_f = df.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index()
-        fig_bar = px.bar(top_f, x='v_total_item', y='nome_emit', orientation='h', text_auto='.2s')
-        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_tickformat="R$ ,.2f")
-        st.plotly_chart(fig_bar, use_container_width=True)
-    with c_cat:
-        st.subheader("Gastos por Família de Material")
-        fig_pie = px.pie(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index(), values='Total_Gasto', names='Categoria', hole=0.5)
-        st.plotly_chart(fig_pie, use_container_width=True)
+        fig_bar_f = px.bar(top_f, x='v_total_item', y='nome_emit', orientation='h', text_auto='.2s')
+        fig_bar_f.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_tickformat="R$ ,.2f")
+        st.plotly_chart(fig_bar_f, use_container_width=True)
+    
+    with col_abc_mat:
+        st.subheader("📦 Top 10 Materiais (R$)") # <--- AQUI ESTÁ O QUE VOCÊ PEDIU
+        # Agrupa por produto para somar caso tenha compras repetidas
+        top_m = df_final.groupby('desc_prod')['Total_Gasto'].sum().nlargest(10).reset_index()
+        fig_bar_m = px.bar(top_m, x='Total_Gasto', y='desc_prod', orientation='h', text_auto='.2s')
+        fig_bar_m.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_tickformat="R$ ,.2f")
+        fig_bar_m.update_traces(marker_color='#ff7f0e') # Cor laranja para diferenciar
+        st.plotly_chart(fig_bar_m, use_container_width=True)
+
+    # 4. Categorias (Abaixo)
+    st.markdown("---")
+    st.subheader("Gastos por Família de Material")
+    fig_pie = px.pie(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index(), values='Total_Gasto', names='Categoria', hole=0.5)
+    st.plotly_chart(fig_pie, use_container_width=True)
 
 # --- TAB 2: CADASTRO & AUDITORIA ---
 with tab2:
