@@ -5,7 +5,7 @@ import plotly.express as px
 import os
 
 # =====================================================
-# 1. CONFIGURAÇÃO & DESIGN (V25 - DASHBOARD COMPLETO)
+# 1. CONFIGURAÇÃO & DESIGN (V26 - UX REFINADA)
 # =====================================================
 st.set_page_config(
     page_title="Portal de Inteligência em Suprimentos",
@@ -42,19 +42,19 @@ st.markdown("""
         margin-bottom: 20px;
         border-top: 5px solid #004280;
     }
+    
+    /* Ajuste de tabelas para não quebrar linha em cabeçalho */
+    th { white-space: nowrap; }
 </style>
 """, unsafe_allow_html=True)
 
 # =====================================================
-# 2. FUNÇÕES FORMATADORAS
+# 2. FUNÇÕES FORMATADORAS (TEXTO PURO)
 # =====================================================
-def format_brl(v):
+# Importante: Retorna STRING para forçar visual BR na tabela
+def format_brl_str(v):
     if pd.isna(v): return "R$ 0,00"
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-def format_perc(v):
-    if pd.isna(v): return "0%"
-    return f"{v:.1f}%".replace(".", ",")
 
 # =====================================================
 # 3. CARREGAMENTO DE DADOS
@@ -83,7 +83,7 @@ if df_full.empty:
     st.stop()
 
 # =====================================================
-# 4. FILTROS (PILLS EM ORDEM)
+# 4. FILTROS
 # =====================================================
 st.title("🏗️ Portal de Inteligência em Suprimentos")
 
@@ -106,7 +106,7 @@ df = df_full[df_full['ano'].isin(sel_anos)].copy()
 st.divider()
 
 # =====================================================
-# 5. CLASSIFICAÇÃO & CÁLCULOS
+# 5. CLASSIFICAÇÃO
 # =====================================================
 def classificar_material(row):
     desc = row['desc_prod']
@@ -161,47 +161,66 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     # 1. KPIs
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Gasto Total (Spend)", format_brl(df['v_total_item'].sum()))
+    c1.metric("Gasto Total (Spend)", format_brl_str(df['v_total_item'].sum()))
     c2.metric("Fornecedores Ativos", df['cnpj_emit'].nunique())
-    c3.metric("Risco Compliance", format_brl(spend_critico), delta="Itens Críticos") 
-    c4.metric("Saving Potencial", format_brl(df_final['Saving_Potencial'].sum()), help="Economia se tivéssemos pago sempre o menor preço histórico.")
+    c3.metric("Risco Compliance", format_brl_str(spend_critico), delta="Itens Críticos") 
+    c4.metric("Saving Potencial", format_brl_str(df_final['Saving_Potencial'].sum()))
 
     # 2. Evolução
     st.subheader("Evolução Financeira")
-    fig_line = px.line(df.groupby('mes_ano')['v_total_item'].sum().reset_index(), x='mes_ano', y='v_total_item', markers=True)
-    fig_line.update_layout(yaxis_tickformat="R$ ,.2f", xaxis_title="Mês", yaxis_title="Valor Gasto")
+    # Gráfico de Área é visualmente mais "cheio" e bonito que linha simples
+    fig_line = px.area(df.groupby('mes_ano')['v_total_item'].sum().reset_index(), x='mes_ano', y='v_total_item', markers=True)
+    fig_line.update_layout(yaxis_tickformat="R$ ,.2f", xaxis_title=None, yaxis_title=None, height=300)
     st.plotly_chart(fig_line, use_container_width=True)
 
-    # 3. TOP FORNECEDORES & TOP MATERIAIS (Lado a Lado)
+    # 3. TOP 10 (VISUAL ENXUTO)
     st.markdown("---")
     col_abc_forn, col_abc_mat = st.columns(2)
     
     with col_abc_forn:
         st.subheader("🏆 Top 10 Fornecedores (R$)")
         top_f = df.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index()
+        
+        # Ajuste: Altura dinâmica (se tiver só 2 itens, fica pequeno. Se tiver 10, cresce)
+        altura_dinamica = 150 + (len(top_f) * 30)
+        
         fig_bar_f = px.bar(top_f, x='v_total_item', y='nome_emit', orientation='h', text_auto='.2s')
-        fig_bar_f.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_tickformat="R$ ,.2f")
+        # Bargap 0.3 deixa a barra mais fina e elegante
+        fig_bar_f.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_tickformat="R$ ,.2f", height=altura_dinamica, margin=dict(l=0, r=0, t=0, b=0), bargap=0.3)
         st.plotly_chart(fig_bar_f, use_container_width=True)
+        
+        # O botão de detalhe
+        with st.expander("🔎 Ver dados detalhados dos Top Fornecedores"):
+            df_view_f = top_f.copy()
+            df_view_f['Total'] = df_view_f['v_total_item'].apply(format_brl_str)
+            st.dataframe(df_view_f[['nome_emit', 'Total']], hide_index=True, use_container_width=True)
     
     with col_abc_mat:
-        st.subheader("📦 Top 10 Materiais (R$)") # <--- AQUI ESTÁ O QUE VOCÊ PEDIU
-        # Agrupa por produto para somar caso tenha compras repetidas
+        st.subheader("📦 Top 10 Materiais (R$)")
         top_m = df_final.groupby('desc_prod')['Total_Gasto'].sum().nlargest(10).reset_index()
+        
+        altura_dinamica_m = 150 + (len(top_m) * 30)
+        
         fig_bar_m = px.bar(top_m, x='Total_Gasto', y='desc_prod', orientation='h', text_auto='.2s')
-        fig_bar_m.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_tickformat="R$ ,.2f")
-        fig_bar_m.update_traces(marker_color='#ff7f0e') # Cor laranja para diferenciar
+        fig_bar_m.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_tickformat="R$ ,.2f", height=altura_dinamica_m, margin=dict(l=0, r=0, t=0, b=0), bargap=0.3)
+        fig_bar_m.update_traces(marker_color='#ff7f0e') 
         st.plotly_chart(fig_bar_m, use_container_width=True)
+        
+        with st.expander("🔎 Ver dados detalhados dos Top Materiais"):
+            df_view_m = top_m.copy()
+            df_view_m['Total'] = df_view_m['Total_Gasto'].apply(format_brl_str)
+            st.dataframe(df_view_m[['desc_prod', 'Total']], hide_index=True, use_container_width=True)
 
-    # 4. Categorias (Abaixo)
+    # 4. Categorias
     st.markdown("---")
-    st.subheader("Gastos por Família de Material")
+    st.subheader("Gastos por Família")
     fig_pie = px.pie(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index(), values='Total_Gasto', names='Categoria', hole=0.5)
+    fig_pie.update_layout(height=350)
     st.plotly_chart(fig_pie, use_container_width=True)
 
 # --- TAB 2: CADASTRO & AUDITORIA ---
 with tab2:
-    st.markdown("##### 🕵️ Ficha Cadastral do Fornecedor")
-    
+    st.markdown("##### 🕵️ Ficha Cadastral")
     lista_f = df.groupby('nome_emit')['v_total_item'].sum().sort_values(ascending=False).index
     forn_sel = st.selectbox("Selecione para ver o cadastro:", lista_f, index=None, placeholder="Digite o nome do fornecedor...")
     
@@ -219,29 +238,23 @@ with tab2:
             <p>{dados.get('xMun','')}/{dados.get('uf_emit','')} - CEP: {dados.get('cep','')}</p>
             <hr>
             <p><b>Performance:</b></p>
-            <h2>Volume Total: {format_brl(total)}</h2>
+            <h2>Volume Total: {format_brl_str(total)}</h2>
         </div>
         """, unsafe_allow_html=True)
 
-        st.write("**Produtos Fornecidos por este Parceiro:**")
-        
+        st.write("**Produtos Fornecidos:**")
         view_forn = df_final[df_final['desc_prod'].isin(df[df['nome_emit'] == forn_sel]['desc_prod'].unique())].copy()
-        view_forn['Total'] = view_forn['Total_Gasto'].apply(format_brl)
+        view_forn['Total'] = view_forn['Total_Gasto'].apply(format_brl_str)
         
         st.dataframe(
             view_forn[['cod_prod', 'desc_prod', 'Categoria', 'Total']],
-            column_config={
-                "cod_prod": "Ref. Fornecedor",
-                "desc_prod": "Descrição",
-                "Categoria": "Família"
-            },
+            column_config={"cod_prod": "Ref. Fornecedor", "desc_prod": "Descrição", "Categoria": "Família"},
             use_container_width=True, hide_index=True
         )
 
-# --- TAB 3: HISTÓRICO DE PREÇOS ---
+# --- TAB 3: HISTÓRICO DE PREÇOS (TABELA FORMATADA CORRETAMENTE) ---
 with tab3:
     st.markdown("### 📉 Evolução e Variação de Preços")
-    st.info("Selecione um item para ver o gráfico de oscilação de preço ao longo do tempo.")
     
     df_final['display_name'] = df_final['desc_prod'] + " | Ref: " + df_final['cod_prod']
     item_bid_display = st.selectbox("Selecione o Item (Descrição | Código):", df_final.sort_values('Total_Gasto', ascending=False)['display_name'].unique())
@@ -253,18 +266,20 @@ with tab3:
         df_item = df[(df['desc_prod'] == desc_sel) & (df['cod_prod'] == cod_sel)].copy()
         
         m1, m2, m3 = st.columns(3)
-        m1.metric("Melhor Preço Já Pago", format_brl(df_item['v_unit'].min()))
-        m2.metric("Pior Preço Já Pago", format_brl(df_item['v_unit'].max()))
-        m3.metric("Preço Médio", format_brl(df_item['v_unit'].mean()))
+        # Formatação aqui funciona porque st.metric aceita string
+        m1.metric("Melhor Preço Já Pago", format_brl_str(df_item['v_unit'].min()))
+        m2.metric("Pior Preço Já Pago", format_brl_str(df_item['v_unit'].max()))
+        m3.metric("Preço Médio", format_brl_str(df_item['v_unit'].mean()))
         
         fig_comp = px.line(df_item.sort_values('data_emissao'), x='data_emissao', y='v_unit', color='nome_emit', markers=True,
                            title=f"Histórico de Compras: {desc_sel}")
-        fig_comp.update_layout(yaxis_tickformat="R$ ,.2f", xaxis_title="Data da Compra", yaxis_title="Preço Unitário Pago")
+        fig_comp.update_layout(yaxis_tickformat="R$ ,.2f", xaxis_title="Data", yaxis_title="Preço Unit.")
         st.plotly_chart(fig_comp, use_container_width=True)
 
+        # TABELA CORRIGIDA: Convertendo para String para forçar visual BR
         df_view_item = df_item[['data_emissao','nome_emit','n_nf','qtd','v_unit','v_total_item']].sort_values('data_emissao', ascending=False).copy()
-        df_view_item['Unitário'] = df_view_item['v_unit'].apply(format_brl)
-        df_view_item['Total'] = df_view_item['v_total_item'].apply(format_brl)
+        df_view_item['Unitário'] = df_view_item['v_unit'].apply(format_brl_str)
+        df_view_item['Total'] = df_view_item['v_total_item'].apply(format_brl_str)
         
         st.dataframe(
             df_view_item[['data_emissao','nome_emit','n_nf','qtd','Unitário','Total']],
@@ -283,8 +298,9 @@ with tab4:
     if termo: view = view[view['desc_prod'].str.contains(termo.upper())]
     if cat_sel: view = view[view['Categoria'].isin(cat_sel)]
 
-    view['Melhor Preço'] = view['Menor_Preco'].apply(format_brl)
-    view['Último Pago'] = view['Ultimo_Preco'].apply(format_brl)
+    # Formatação String para Tabela
+    view['Melhor Preço'] = view['Menor_Preco'].apply(format_brl_str)
+    view['Último Pago'] = view['Ultimo_Preco'].apply(format_brl_str)
     
     st.dataframe(
         view[['Categoria', 'cod_prod', 'desc_prod', 'Melhor Preço', 'Último Pago', 'Variacao_Preco', 'Ultimo_Forn', 'Ultima_Data']],
@@ -292,12 +308,7 @@ with tab4:
             "Categoria": st.column_config.TextColumn("Família", width="medium"),
             "cod_prod": st.column_config.TextColumn("Ref.", width="small"),
             "desc_prod": st.column_config.TextColumn("Descrição", width="large"),
-            "Variacao_Preco": st.column_config.ProgressColumn(
-                "Variação %", 
-                format="%.1f%%", 
-                min_value=0, max_value=1,
-                help="Quanto o último preço variou em relação ao mínimo histórico"
-            ),
+            "Variacao_Preco": st.column_config.ProgressColumn("Var. %", format="%.1f%%", min_value=0, max_value=1),
             "Ultima_Data": st.column_config.DateColumn("Última Compra", format="DD/MM/YYYY")
         },
         use_container_width=True, hide_index=True, height=600
