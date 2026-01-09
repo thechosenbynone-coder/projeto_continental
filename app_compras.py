@@ -5,7 +5,7 @@ import plotly.express as px
 import os
 
 # =====================================================
-# 1. CONFIGURAÇÃO & DESIGN (V23 - CLEAN UI)
+# 1. CONFIGURAÇÃO & DESIGN (V24 - CLEAN UI)
 # =====================================================
 st.set_page_config(
     page_title="Portal de Inteligência em Suprimentos",
@@ -83,16 +83,16 @@ if df_full.empty:
     st.stop()
 
 # =====================================================
-# 4. FILTROS (VISUAL DE BALÃO / PILLS) 🎈
+# 4. FILTROS (PILLS EM ORDEM CRONOLÓGICA) 🎈
 # =====================================================
 st.title("🏗️ Portal de Inteligência em Suprimentos")
 
-# Container de Filtros no Topo (Não escondido)
 with st.container():
     st.write("##### 📅 Período de Análise")
-    anos_disponiveis = sorted(df_full['ano'].unique(), reverse=True)
     
-    # O PULO DO GATO: st.pills cria os botões bonitos de seleção
+    # CORREÇÃO AQUI: Ordem crescente (sorted sem reverse)
+    anos_disponiveis = sorted(df_full['ano'].unique()) 
+    
     sel_anos = st.pills(
         "Selecione os anos fiscais:",
         options=anos_disponiveis,
@@ -151,9 +151,8 @@ df_final['Saving_Potencial'] = df_final['Total_Gasto'] - (df_final['Menor_Preco'
 spend_critico = df_final[df_final['Categoria'].str.contains('CRÍTICO')]['Total_Gasto'].sum()
 
 # =====================================================
-# 6. LAYOUT PRINCIPAL (ABAS RENOMEADAS)
+# 6. LAYOUT PRINCIPAL
 # =====================================================
-# Aqui usamos nomes claros como você pediu
 tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Dashboard", 
     "📇 Cadastro & Auditoria", 
@@ -176,7 +175,7 @@ with tab1:
 
     c_abc, c_cat = st.columns(2)
     with c_abc:
-        st.subheader("Curva ABC (Quem leva nosso dinheiro?)")
+        st.subheader("Curva ABC (Top 10 Fornecedores)")
         top_f = df.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index()
         fig_bar = px.bar(top_f, x='v_total_item', y='nome_emit', orientation='h', text_auto='.2s')
         fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_tickformat="R$ ,.2f")
@@ -197,7 +196,6 @@ with tab2:
         dados = df[df['nome_emit'] == forn_sel].iloc[0]
         total = df[df['nome_emit'] == forn_sel]['v_total_item'].sum()
         
-        # HTML melhorado com título claro de "Cadastro"
         st.markdown(f"""
         <div class="card-fornecedor">
             <h3 style="margin:0;">🏢 {forn_sel}</h3>
@@ -214,7 +212,6 @@ with tab2:
 
         st.write("**Produtos Fornecidos por este Parceiro:**")
         
-        # Prepara visualização com moeda BR
         view_forn = df_final[df_final['desc_prod'].isin(df[df['nome_emit'] == forn_sel]['desc_prod'].unique())].copy()
         view_forn['Total'] = view_forn['Total_Gasto'].apply(format_brl)
         
@@ -228,7 +225,7 @@ with tab2:
             use_container_width=True, hide_index=True
         )
 
-# --- TAB 3: HISTÓRICO DE PREÇOS (Antigo Bid Leveling) ---
+# --- TAB 3: HISTÓRICO DE PREÇOS ---
 with tab3:
     st.markdown("### 📉 Evolução e Variação de Preços")
     st.info("Selecione um item para ver o gráfico de oscilação de preço ao longo do tempo.")
@@ -247,13 +244,11 @@ with tab3:
         m2.metric("Pior Preço Já Pago", format_brl(df_item['v_unit'].max()))
         m3.metric("Preço Médio", format_brl(df_item['v_unit'].mean()))
         
-        # Gráfico de Linha simples e direto
         fig_comp = px.line(df_item.sort_values('data_emissao'), x='data_emissao', y='v_unit', color='nome_emit', markers=True,
                            title=f"Histórico de Compras: {desc_sel}")
         fig_comp.update_layout(yaxis_tickformat="R$ ,.2f", xaxis_title="Data da Compra", yaxis_title="Preço Unitário Pago")
         st.plotly_chart(fig_comp, use_container_width=True)
 
-        # Tabela formatada
         df_view_item = df_item[['data_emissao','nome_emit','n_nf','qtd','v_unit','v_total_item']].sort_values('data_emissao', ascending=False).copy()
         df_view_item['Unitário'] = df_view_item['v_unit'].apply(format_brl)
         df_view_item['Total'] = df_view_item['v_total_item'].apply(format_brl)
@@ -264,7 +259,7 @@ with tab3:
             use_container_width=True, hide_index=True
         )
 
-# --- TAB 4: BUSCA AVANÇADA (Com Moeda BR) ---
+# --- TAB 4: BUSCA AVANÇADA ---
 with tab4:
     st.markdown("##### 🔎 Pesquisar na Base de Dados")
     c_busca, c_cat = st.columns([3, 1])
@@ -275,7 +270,6 @@ with tab4:
     if termo: view = view[view['desc_prod'].str.contains(termo.upper())]
     if cat_sel: view = view[view['Categoria'].isin(cat_sel)]
 
-    # Formatação Visual para Tabela (String)
     view['Melhor Preço'] = view['Menor_Preco'].apply(format_brl)
     view['Último Pago'] = view['Ultimo_Preco'].apply(format_brl)
     
