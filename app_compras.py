@@ -5,79 +5,50 @@ import plotly.express as px
 import os
 
 # =====================================================
-# 1. CONFIGURAÇÃO & DESIGN SYSTEM ADAPTATIVO
+# 1. CONFIGURAÇÃO & DESIGN SYSTEM
 # =====================================================
 st.set_page_config(
     page_title="Portal de Inteligência em Suprimentos",
     page_icon="🏗️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# CSS QUE SE ADAPTA AO TEMA (SEM CORES FIXAS)
 st.markdown("""
 <style>
-    /* Importando fonte corporativa limpa */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
-    
-    html, body, [class*="css"]  {
-        font-family: 'Inter', sans-serif;
-    }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
-    /* ESTILO DOS CARDS (METRICAS) - AGORA ADAPTATIVO */
+    /* Cards Métricas */
     div[data-testid="stMetric"] {
-        background-color: var(--secondary-background-color); /* Se adapta ao Dark/Light */
-        border: 1px solid rgba(128, 128, 128, 0.2); /* Borda sutil em qualquer modo */
-        padding: 20px;
-        border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        background-color: var(--secondary-background-color);
+        border: 1px solid rgba(128,128,128,0.2);
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 5px solid #004280;
     }
     
-    /* Valor da Métrica sempre destacado na cor primária (Vermelho ou Custom) */
     [data-testid="stMetricValue"] {
-        font-size: 28px !important;
+        font-size: 26px !important;
         font-weight: 700;
         color: var(--primary-color) !important;
     }
+
+    /* Tabelas e Gráficos */
+    .stDataFrame { border: 1px solid rgba(128,128,128,0.2); border-radius: 8px; }
     
-    [data-testid="stMetricLabel"] {
-        font-size: 14px;
-        font-weight: 600;
-        opacity: 0.7; /* Suaviza o texto do label sem forçar cor */
-    }
-
-    /* CONTAINER DE GRÁFICOS (EFEITO CARD) */
-    .chart-container {
-        background-color: var(--secondary-background-color);
-        padding: 20px;
-        border-radius: 12px;
-        border: 1px solid rgba(128, 128, 128, 0.2);
-        margin-bottom: 20px;
-    }
-
-    /* CARTÃO DE FORNECEDOR (HTML ADAPTATIVO) */
+    /* Cartão de Fornecedor */
     .card-fornecedor {
         background-color: var(--secondary-background-color);
-        padding: 24px;
-        border-radius: 12px;
-        border: 1px solid rgba(128, 128, 128, 0.2);
-        border-left: 6px solid #004280;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid rgba(128,128,128,0.2);
         margin-bottom: 20px;
     }
-    
-    /* Ajustes para textos dentro do HTML customizado respeitarem o tema */
-    .card-fornecedor h2, .card-fornecedor h3, .card-fornecedor p {
-        color: var(--text-color);
-    }
-    
-    .card-critico { border-left-color: #dc3545; }
-    .card-ok { border-left-color: #28a745; }
-    
 </style>
 """, unsafe_allow_html=True)
 
 # =====================================================
-# 2. FUNÇÕES & HELPERS
+# 2. FUNÇÕES FORMATADORAS
 # =====================================================
 def format_brl(v):
     if pd.isna(v): return "R$ 0,00"
@@ -88,7 +59,7 @@ def format_perc(v):
     return f"{v:.1f}%"
 
 # =====================================================
-# 3. CARREGAMENTO DE DADOS (ENGINE)
+# 3. CARREGAMENTO DE DADOS
 # =====================================================
 @st.cache_data
 def carregar_dados():
@@ -104,7 +75,6 @@ def carregar_dados():
     df['data_emissao'] = pd.to_datetime(df['data_emissao'])
     df['ano'] = df['data_emissao'].dt.year
     df['mes_ano'] = df['data_emissao'].dt.strftime('%Y-%m')
-    df['bimestre'] = df['data_emissao'].dt.to_period('2M').astype(str)
     df['desc_prod'] = df['desc_prod'].astype(str).str.upper().str.strip()
     df['ncm'] = df['ncm'].astype(str).str.replace('.', '', regex=False)
     
@@ -112,217 +82,191 @@ def carregar_dados():
 
 df_full = carregar_dados()
 if df_full.empty:
-    st.error("⛔ SISTEMA OFFLINE: Base de dados não conectada.")
+    st.error("⚠️ Base de dados vazia. Rode o extrator novo e faça upload do .db")
     st.stop()
 
 # =====================================================
-# 4. SIDEBAR (NAVEGAÇÃO)
+# 4. FILTROS (Sem o filtro de Estado que você não queria)
 # =====================================================
 with st.sidebar:
-    st.markdown("### 🏗️ Sourcing Intel")
-    st.caption("v.2.1 Enterprise Dark/Light")
-    st.markdown("---")
-    
-    st.subheader("Filtros Globais")
+    st.title("🎛️ Filtros")
     anos = sorted(df_full['ano'].unique(), reverse=True)
     sel_anos = st.multiselect("Ano Fiscal:", anos, default=anos)
-    
-    ufs = sorted(df_full['uf_emit'].dropna().unique())
-    sel_uf = st.multiselect("Região (UF):", ufs, default=ufs)
 
 if not sel_anos: st.stop()
-df = df_full[(df_full['ano'].isin(sel_anos)) & (df_full['uf_emit'].isin(sel_uf))].copy()
+df = df_full[df_full['ano'].isin(sel_anos)].copy()
 
 # =====================================================
-# 5. LÓGICA DE NEGÓCIO (CLASSIFICAÇÃO)
+# 5. CLASSIFICAÇÃO & ETL
 # =====================================================
 def classificar_material(row):
     desc = row['desc_prod']
     ncm = row['ncm']
+    
     termos_anti_epi = ['REDUCAO', 'RED ', 'SOLDAVEL', 'ROSCA', 'NPT', 'BSP', 'JOELHO', 'TE ', 'NIPLE', 'ADAPTADOR', 'CURVA', 'CONEXAO', 'UNIAO', 'LBS', 'CLASSE', 'SCH', 'DN ', 'CARBONO', 'INOX', 'ACO ', 'AÇO ', 'GALVANIZAD', 'LATÃO', 'FERRO', 'ESGOTO', 'SIFAO']
     
-    if ncm.startswith(('2710','3403')) or (any(x in desc for x in ['OLEO','GRAXA','SOLVENTE','THINNER']) and 'ALIMENT' not in desc):
-        return '🔴 QUÍMICO', 'FISPQ/CTF'
+    if ncm.startswith(('2710','3403')) or (any(x in desc for x in ['OLEO','GRAXA','SOLVENTE']) and 'ALIMENT' not in desc):
+        return '🔴 QUÍMICO (CRÍTICO)'
     if any(x in desc for x in ['CABO DE ACO','CINTA DE CARGA','MANILHA','GANCHO']):
-        return '🟡 IÇAMENTO', 'Certificado'
+        return '🟡 IÇAMENTO (CRÍTICO)'
     
     eh_epi = ncm.startswith(('6116','4015','4203','6403','6506','9020','9004','6307'))
     tem_termo = any(t in desc for t in ['LUVA','BOTA','CAPACETE','OCULOS','PROTETOR','MASCARA','CINTO','RESPIRADOR'])
     bloqueio = any(t in desc for t in termos_anti_epi)
 
     if (eh_epi or tem_termo) and not bloqueio:
-        return '🟠 EPI', 'CA/Ficha'
+        return '🟠 EPI (CRÍTICO)'
     
-    if any(x in desc for x in ['TUBO','PVC','VALVULA','REGISTRO','CONEXAO']): return '💧 HIDRÁULICA', 'Geral'
-    if any(x in desc for x in ['CABO','DISJUNTOR','LAMPADA','RELE','FIO']): return '⚡ ELÉTRICA', 'Geral'
-    if any(x in desc for x in ['CIMENTO','AREIA','ARGAMASSA','TIJOLO']): return '🧱 CIVIL', 'Geral'
-    if any(x in desc for x in ['CHAVE','BROCA','MARTELO','SERRA']): return '🔧 FERRAMENTAS', 'Geral'
-    return '📦 GERAL', 'Geral'
+    if any(x in desc for x in ['TUBO','PVC','VALVULA','REGISTRO','CONEXAO']): return '💧 HIDRÁULICA'
+    if any(x in desc for x in ['CABO','DISJUNTOR','LAMPADA','RELE','FIO']): return '⚡ ELÉTRICA'
+    if any(x in desc for x in ['CIMENTO','AREIA','ARGAMASSA','TIJOLO']): return '🧱 CIVIL'
+    if any(x in desc for x in ['CHAVE','BROCA','MARTELO','SERRA']): return '🔧 FERRAMENTAS'
+    return '📦 GERAL'
 
-# ETL EM MEMÓRIA
+# Agrupa por Descrição e NCM
 df_grouped = df.groupby(['desc_prod','ncm']).agg(
     Total_Gasto=('v_total_item','sum'),
     Qtd_Total=('qtd','sum'),
     Menor_Preco=('v_unit','min'),
-    Maior_Preco=('v_unit','max')
 ).reset_index()
 
-df_grouped[['Categoria','Exigencia']] = df_grouped.apply(lambda x: pd.Series(classificar_material(x)), axis=1)
+df_grouped['Categoria'] = df_grouped.apply(classificar_material, axis=1)
 
+# Pega dados da última compra
 df_last = df.sort_values('data_emissao').drop_duplicates(['desc_prod','ncm'], keep='last')[['desc_prod','ncm','v_unit','nome_emit','n_nf','data_emissao']]
 df_last.rename(columns={'v_unit':'Ultimo_Preco', 'nome_emit':'Ultimo_Forn', 'n_nf':'Ultima_NF', 'data_emissao':'Ultima_Data'}, inplace=True)
 
 df_final = df_grouped.merge(df_last, on=['desc_prod','ncm'], how='left')
-df_final['Variacao_Preco'] = ((df_final['Ultimo_Preco'] - df_final['Menor_Preco']) / df_final['Menor_Preco']) # Para barra de progresso (0.0 a 1.0)
+
+# Cálculos Finais
+df_final['Variacao_Preco'] = ((df_final['Ultimo_Preco'] - df_final['Menor_Preco']) / df_final['Menor_Preco'])
 df_final['Saving_Potencial'] = df_final['Total_Gasto'] - (df_final['Menor_Preco'] * df_final['Qtd_Total'])
 
+# CORREÇÃO DO SPEND CRÍTICO
+spend_critico = df_final[df_final['Categoria'].str.contains('CRÍTICO')]['Total_Gasto'].sum()
+
 # =====================================================
-# 6. LAYOUT DA PLATAFORMA
+# 6. INTERFACE V21
 # =====================================================
-st.markdown("## 📊 Visão Geral da Operação")
+st.title("🏗️ Portal de Inteligência em Suprimentos")
 st.markdown("---")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Auditoria", "Bid Leveling", "Pesquisa Avançada"])
+tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Auditoria", "Bid Leveling (Comparador)", "Pesquisa"])
 
-# --- TAB 1: DASHBOARD EXECUTIVO ---
+# --- TAB 1: DASHBOARD ---
 with tab1:
-    # 1. KPIs FINANCEIROS (LINHA 1)
-    st.markdown("##### 💰 Performance Financeira")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Spend Total", format_brl(df['v_total_item'].sum()), delta="YTD")
-    c2.metric("Saving Potencial", format_brl(df_final['Saving_Potencial'].sum()), delta="Oportunidade", delta_color="normal")
-    c3.metric("Ticket Médio", format_brl(df['v_total_item'].mean()))
-    c4.metric("% Spend Crítico", format_perc(df_final[df_final['Categoria'].str.contains('CRÍTICO')]['Total_Gasto'].sum() / df['v_total_item'].sum() * 100))
+    c1.metric("Spend Total", format_brl(df['v_total_item'].sum()))
+    c2.metric("Fornecedores", df['cnpj_emit'].nunique())
+    # Agora o Spend Crítico vai funcionar
+    c3.metric("Spend Crítico (Risco)", format_brl(spend_critico), delta="Compliance") 
+    c4.metric("Saving Potencial", format_brl(df_final['Saving_Potencial'].sum()))
 
-    # 2. KPIs OPERACIONAIS (LINHA 2)
-    st.markdown("##### ⚙️ Indicadores Operacionais")
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Fornecedores Ativos", df['cnpj_emit'].nunique())
-    k2.metric("Itens Gerenciados", df_final['desc_prod'].nunique())
-    k3.metric("Notas Processadas", df['n_nf'].nunique())
-    k4.metric("Itens Monofornecedor", (df.groupby('desc_prod')['nome_emit'].nunique() == 1).sum(), delta="Risco Supply", delta_color="inverse")
+    st.subheader("Evolução de Gastos (Linha do Tempo)")
+    # Gráfico simples e direto
+    fig_line = px.line(df.groupby('mes_ano')['v_total_item'].sum().reset_index(), x='mes_ano', y='v_total_item', markers=True)
+    fig_line.update_layout(yaxis_tickformat="R$ ,.2f", xaxis_title="Mês", yaxis_title="Valor Gasto")
+    st.plotly_chart(fig_line, use_container_width=True)
 
-    st.markdown("###")
-
-    # 3. GRÁFICOS EM CONTAINERS ADAPTATIVOS
-    col_g1, col_g2 = st.columns([2, 1])
+    col_abc, col_cat = st.columns(2)
+    with col_abc:
+        st.subheader("Curva ABC (Top 10 Fornecedores)")
+        top_f = df.groupby('nome_emit')['v_total_item'].sum().nlargest(10).reset_index()
+        fig_bar = px.bar(top_f, x='v_total_item', y='nome_emit', orientation='h', text_auto='.2s')
+        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_tickformat="R$ ,.2f")
+        st.plotly_chart(fig_bar, use_container_width=True)
     
-    with col_g1:
-        with st.container():
-            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-            st.subheader("📈 Evolução de Spend (Bimestral)")
-            df_time = df.groupby('bimestre')['v_total_item'].sum().reset_index()
-            # Plotly se adapta ao fundo transparente/variavel
-            fig_line = px.area(df_time, x='bimestre', y='v_total_item', markers=True)
-            fig_line.update_traces(line_color='#004280', fillcolor='rgba(0, 66, 128, 0.1)')
-            # Removido plot_bgcolor white para aceitar o tema
-            fig_line.update_layout(yaxis_tickformat="R$ ,.2s", margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_line, use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+    with col_cat:
+        st.subheader("Share por Categoria")
+        fig_pie = px.pie(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index(), values='Total_Gasto', names='Categoria', hole=0.5)
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-    with col_g2:
-        with st.container():
-            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-            st.subheader("🍩 Share por Categoria")
-            fig_pie = px.pie(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index(), 
-                             values='Total_Gasto', names='Categoria', hole=0.6,
-                             color_discrete_sequence=px.colors.qualitative.Prism)
-            fig_pie.update_layout(showlegend=False, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_pie, use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-# --- TAB 2: AUDITORIA (CARD UI) ---
+# --- TAB 2: AUDITORIA ---
 with tab2:
-    st.markdown("##### 🕵️ Dossiê do Fornecedor")
-    col_sel, col_vazio = st.columns([1, 2])
-    forn_sel = col_sel.selectbox("Selecione para auditar:", df.groupby('nome_emit')['v_total_item'].sum().sort_values(ascending=False).index, index=None, placeholder="Digite o nome...")
-
+    lista_f = df.groupby('nome_emit')['v_total_item'].sum().sort_values(ascending=False).index
+    forn_sel = st.selectbox("Selecione Fornecedor:", lista_f, index=None, placeholder="Digite o nome...")
+    
     if forn_sel:
-        dados_f = df[df['nome_emit'] == forn_sel].iloc[0]
-        total_f = df[df['nome_emit'] == forn_sel]['v_total_item'].sum()
-        mix_f = df_final[df_final['desc_prod'].isin(df[df['nome_emit'] == forn_sel]['desc_prod'].unique())].copy()
+        dados = df[df['nome_emit'] == forn_sel].iloc[0]
+        total = df[df['nome_emit'] == forn_sel]['v_total_item'].sum()
         
-        has_risk = any("CRÍTICO" in x for x in mix_f['Categoria'])
-        card_class = "card-critico" if has_risk else "card-ok"
-        status_txt = "🚨 Fornecedor Crítico (EPI/Químico)" if has_risk else "✅ Fornecedor Geral"
-        status_color = "#dc3545" if has_risk else "#28a745"
-
-        # CARD HTML ADAPTATIVO
+        # HTML que respeita o tema (sem cor de fundo fixa)
         st.markdown(f"""
-        <div class="card-fornecedor {card_class}">
-            <h2 style="margin:0;">{forn_sel}</h2>
-            <p style="opacity:0.8; font-size:14px;">CNPJ: {dados_f['cnpj_emit']}</p>
-            <div style="display:flex; justify-content:space-between; margin-top:20px;">
-                <div>
-                    <p style="font-weight:bold; margin-bottom:5px;">📍 Localização</p>
-                    <p style="margin:0; font-size:13px;">{dados_f.get('xLgr','')}, {dados_f.get('nro','')}</p>
-                    <p style="margin:0; font-size:13px;">{dados_f.get('xBairro','')} - {dados_f.get('xMun','')}/{dados_f.get('uf_emit','')}</p>
-                    <p style="margin:0; font-size:13px;">CEP: {dados_f.get('cep','')}</p>
-                </div>
-                <div style="text-align:right;">
-                    <p style="font-weight:bold; margin-bottom:5px;">💵 Volume Total</p>
-                    <h3 style="margin:0; color:#004280;">{format_brl(total_f)}</h3>
-                    <p style="color:{status_color}; font-weight:bold; margin-top:10px;">{status_txt}</p>
-                </div>
-            </div>
+        <div class="card-fornecedor">
+            <h3 style="margin:0;">{forn_sel}</h3>
+            <p>CNPJ: {dados['cnpj_emit']}</p>
+            <hr>
+            <p>📍 {dados.get('xLgr','')}, {dados.get('nro','')} - {dados.get('xBairro','')}</p>
+            <p>{dados.get('xMun','')}/{dados.get('uf_emit','')} - CEP: {dados.get('cep','')}</p>
+            <hr>
+            <h2>Volume: {format_brl(total)}</h2>
         </div>
         """, unsafe_allow_html=True)
-        
+
         st.dataframe(
-            mix_f[['desc_prod', 'Categoria', 'Exigencia', 'Total_Gasto']],
-            column_config={
-                "Total_Gasto": st.column_config.ProgressColumn("Volume (R$)", format="R$ %.2f", min_value=0, max_value=mix_f['Total_Gasto'].max()),
-            },
+            df_final[df_final['desc_prod'].isin(df[df['nome_emit'] == forn_sel]['desc_prod'].unique())][['desc_prod','Categoria','Total_Gasto']],
+            column_config={"Total_Gasto": st.column_config.NumberColumn("Total", format="R$ %.2f")},
             use_container_width=True, hide_index=True
         )
 
-# --- TAB 3: COMPARADOR (PLOTLY CLEAN) ---
+# --- TAB 3: BID LEVELING (CORRIGIDO - FÁCIL DE ENTENDER) ---
 with tab3:
-    st.markdown("##### ⚖️ Bid Leveling (Comparativo)")
+    st.markdown("### 📉 Histórico de Preços (Comparativo)")
+    st.info("Veja como o preço do item mudou ao longo do tempo e quem vendeu mais barato.")
+    
     item_bid = st.selectbox("Selecione o Item:", df_final.sort_values('Total_Gasto', ascending=False)['desc_prod'].unique())
     
     if item_bid:
         df_item = df[df['desc_prod'] == item_bid].copy()
         
-        fig_scatter = px.scatter(df_item, x='data_emissao', y='v_unit', color='nome_emit', size='qtd',
-                                 title=f"Dispersão de Preços: {item_bid}",
-                                 labels={'v_unit': 'Preço Unitário (R$)', 'data_emissao': 'Data', 'nome_emit': 'Fornecedor'})
-        # Removido plot_bgcolor para aceitar tema dark
-        fig_scatter.update_layout(yaxis_tickformat="R$ ,.2f", xaxis_title=None, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        fig_scatter.update_xaxes(showgrid=True, gridcolor='rgba(128,128,128,0.2)')
-        fig_scatter.update_yaxes(showgrid=True, gridcolor='rgba(128,128,128,0.2)')
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        # MÉTRICAS DE RESUMO
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Melhor Preço Pago", format_brl(df_item['v_unit'].min()))
+        m2.metric("Pior Preço Pago", format_brl(df_item['v_unit'].max()))
+        m3.metric("Média", format_brl(df_item['v_unit'].mean()))
+        
+        # GRÁFICO DE LINHA (MUITO MAIS CLARO QUE BOLHAS)
+        # Eixo X = Data, Eixo Y = Preço, Cor = Fornecedor
+        fig_comp = px.line(df_item.sort_values('data_emissao'), x='data_emissao', y='v_unit', color='nome_emit', markers=True,
+                           title=f"Evolução de Preço: {item_bid}")
+        fig_comp.update_layout(yaxis_tickformat="R$ ,.2f", xaxis_title="Data da Compra", yaxis_title="Preço Unitário")
+        st.plotly_chart(fig_comp, use_container_width=True)
 
-# --- TAB 4: PESQUISA (DATA EDITOR PRO) ---
+        st.write("Detalhes das Compras:")
+        st.dataframe(
+            df_item[['data_emissao','nome_emit','n_nf','qtd','v_unit','v_total_item']].sort_values('data_emissao', ascending=False),
+            column_config={
+                "data_emissao": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+                "v_unit": st.column_config.NumberColumn("Preço Unit.", format="R$ %.2f"),
+                "v_total_item": st.column_config.NumberColumn("Total", format="R$ %.2f"),
+            },
+            use_container_width=True, hide_index=True
+        )
+
+# --- TAB 4: PESQUISA ---
 with tab4:
-    st.markdown("##### 🔎 Busca Avançada de Materiais")
-    col_search, col_fam = st.columns([3, 1])
-    termo = col_search.text_input("Buscar Item:", placeholder="Ex: Luva, Cabo...")
-    cat_filtro = col_fam.multiselect("Categoria:", sorted(df_final['Categoria'].unique()))
+    c_busca, c_cat = st.columns([3, 1])
+    termo = c_busca.text_input("Buscar:", placeholder="Ex: Mangueira...")
+    cat_sel = c_cat.multiselect("Categoria:", df_final['Categoria'].unique())
     
     view = df_final.copy()
-    if termo:
-        view = view[view['desc_prod'].str.contains(termo.upper()) | view['ncm'].str.contains(termo)]
-    if cat_filtro:
-        view = view[view['Categoria'].isin(cat_filtro)]
+    if termo: view = view[view['desc_prod'].str.contains(termo.upper())]
+    if cat_sel: view = view[view['Categoria'].isin(cat_sel)]
 
     st.dataframe(
         view[['Categoria', 'desc_prod', 'Menor_Preco', 'Ultimo_Preco', 'Variacao_Preco', 'Ultimo_Forn', 'Ultima_Data']],
         column_config={
             "Categoria": st.column_config.TextColumn("Família", width="medium"),
             "desc_prod": st.column_config.TextColumn("Descrição", width="large"),
-            "Menor_Preco": st.column_config.NumberColumn("Melhor Preço", format="R$ %.2f"),
+            "Menor_Preco": st.column_config.NumberColumn("Melhor (Hist)", format="R$ %.2f"),
             "Ultimo_Preco": st.column_config.NumberColumn("Último Pago", format="R$ %.2f"),
             "Variacao_Preco": st.column_config.ProgressColumn(
-                "Var. Preço (%)", 
-                help="Variação vs Mínimo Histórico",
+                "Var. %", 
                 format="%.1f%%", 
-                min_value=0, 
-                max_value=1
+                min_value=0, max_value=1,
+                help="Variação entre o Último Pago e o Mínimo Histórico"
             ),
             "Ultima_Data": st.column_config.DateColumn("Data", format="DD/MM/YYYY")
         },
-        use_container_width=True,
-        hide_index=True,
-        height=600
+        use_container_width=True, hide_index=True, height=600
     )
