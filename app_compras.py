@@ -5,7 +5,7 @@ import plotly.express as px
 import os
 
 # =====================================================
-# 1. CONFIGURAÇÃO & DESIGN SYSTEM (CSS PROFISSIONAL)
+# 1. CONFIGURAÇÃO & DESIGN SYSTEM ADAPTATIVO
 # =====================================================
 st.set_page_config(
     page_title="Portal de Inteligência em Suprimentos",
@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS AVANÇADO PARA VISUAL DE SISTEMA SaaS
+# CSS QUE SE ADAPTA AO TEMA (SEM CORES FIXAS)
 st.markdown("""
 <style>
     /* Importando fonte corporativa limpa */
@@ -24,66 +24,52 @@ st.markdown("""
         font-family: 'Inter', sans-serif;
     }
 
-    /* Fundo geral mais suave */
-    .stApp {
-        background-color: #f4f6f9;
-    }
-
-    /* ESTILO DOS CARDS (METRICAS) */
+    /* ESTILO DOS CARDS (METRICAS) - AGORA ADAPTATIVO */
     div[data-testid="stMetric"] {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
+        background-color: var(--secondary-background-color); /* Se adapta ao Dark/Light */
+        border: 1px solid rgba(128, 128, 128, 0.2); /* Borda sutil em qualquer modo */
         padding: 20px;
         border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.02);
-        transition: transform 0.2s ease;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    div[data-testid="stMetric"]:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(0,0,0,0.08);
-        border-color: #004280;
-    }
-    [data-testid="stMetricLabel"] {
-        color: #6c757d;
-        font-size: 14px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
+    
+    /* Valor da Métrica sempre destacado na cor primária (Vermelho ou Custom) */
     [data-testid="stMetricValue"] {
-        color: #1a1a1a !important;
         font-size: 28px !important;
         font-weight: 700;
+        color: var(--primary-color) !important;
+    }
+    
+    [data-testid="stMetricLabel"] {
+        font-size: 14px;
+        font-weight: 600;
+        opacity: 0.7; /* Suaviza o texto do label sem forçar cor */
     }
 
     /* CONTAINER DE GRÁFICOS (EFEITO CARD) */
     .chart-container {
-        background-color: white;
+        background-color: var(--secondary-background-color);
         padding: 20px;
         border-radius: 12px;
-        border: 1px solid #e0e0e0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        border: 1px solid rgba(128, 128, 128, 0.2);
         margin-bottom: 20px;
     }
 
-    /* SIDEBAR PROFISSIONAL */
-    section[data-testid="stSidebar"] {
-        background-color: #ffffff;
-        border-right: 1px solid #e0e0e0;
-    }
-    
-    /* CABEÇALHO TABELAS */
-    thead tr th:first-child {display:none}
-    tbody th {display:none}
-    
-    /* CARTÃO DE FORNECEDOR (HTML) */
+    /* CARTÃO DE FORNECEDOR (HTML ADAPTATIVO) */
     .card-fornecedor {
-        background-color: white;
+        background-color: var(--secondary-background-color);
         padding: 24px;
         border-radius: 12px;
+        border: 1px solid rgba(128, 128, 128, 0.2);
         border-left: 6px solid #004280;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        margin-bottom: 20px;
     }
+    
+    /* Ajustes para textos dentro do HTML customizado respeitarem o tema */
+    .card-fornecedor h2, .card-fornecedor h3, .card-fornecedor p {
+        color: var(--text-color);
+    }
+    
     .card-critico { border-left-color: #dc3545; }
     .card-ok { border-left-color: #28a745; }
     
@@ -134,7 +120,7 @@ if df_full.empty:
 # =====================================================
 with st.sidebar:
     st.markdown("### 🏗️ Sourcing Intel")
-    st.caption("v.2.0 Enterprise")
+    st.caption("v.2.1 Enterprise Dark/Light")
     st.markdown("---")
     
     st.subheader("Filtros Globais")
@@ -143,9 +129,6 @@ with st.sidebar:
     
     ufs = sorted(df_full['uf_emit'].dropna().unique())
     sel_uf = st.multiselect("Região (UF):", ufs, default=ufs)
-    
-    st.markdown("---")
-    st.info("💡 **Dica:** Utilize os filtros para refinar os KPIs do dashboard.")
 
 if not sel_anos: st.stop()
 df = df_full[(df_full['ano'].isin(sel_anos)) & (df_full['uf_emit'].isin(sel_uf))].copy()
@@ -191,7 +174,6 @@ df_last.rename(columns={'v_unit':'Ultimo_Preco', 'nome_emit':'Ultimo_Forn', 'n_n
 
 df_final = df_grouped.merge(df_last, on=['desc_prod','ncm'], how='left')
 df_final['Variacao_Preco'] = ((df_final['Ultimo_Preco'] - df_final['Menor_Preco']) / df_final['Menor_Preco']) # Para barra de progresso (0.0 a 1.0)
-df_final['Variacao_Pct'] = df_final['Variacao_Preco'] * 100 # Para mostrar texto
 df_final['Saving_Potencial'] = df_final['Total_Gasto'] - (df_final['Menor_Preco'] * df_final['Qtd_Total'])
 
 # =====================================================
@@ -200,7 +182,6 @@ df_final['Saving_Potencial'] = df_final['Total_Gasto'] - (df_final['Menor_Preco'
 st.markdown("## 📊 Visão Geral da Operação")
 st.markdown("---")
 
-# ABAS COM ÍCONES E NOMES CURTOS
 tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Auditoria", "Bid Leveling", "Pesquisa Avançada"])
 
 # --- TAB 1: DASHBOARD EXECUTIVO ---
@@ -221,9 +202,9 @@ with tab1:
     k3.metric("Notas Processadas", df['n_nf'].nunique())
     k4.metric("Itens Monofornecedor", (df.groupby('desc_prod')['nome_emit'].nunique() == 1).sum(), delta="Risco Supply", delta_color="inverse")
 
-    st.markdown("###") # Espaço
+    st.markdown("###")
 
-    # 3. GRÁFICOS EM CONTAINERS (VISUAL LIMPO)
+    # 3. GRÁFICOS EM CONTAINERS ADAPTATIVOS
     col_g1, col_g2 = st.columns([2, 1])
     
     with col_g1:
@@ -231,9 +212,11 @@ with tab1:
             st.markdown('<div class="chart-container">', unsafe_allow_html=True)
             st.subheader("📈 Evolução de Spend (Bimestral)")
             df_time = df.groupby('bimestre')['v_total_item'].sum().reset_index()
+            # Plotly se adapta ao fundo transparente/variavel
             fig_line = px.area(df_time, x='bimestre', y='v_total_item', markers=True)
             fig_line.update_traces(line_color='#004280', fillcolor='rgba(0, 66, 128, 0.1)')
-            fig_line.update_layout(plot_bgcolor='white', yaxis_tickformat="R$ ,.2s", margin=dict(l=20, r=20, t=40, b=20))
+            # Removido plot_bgcolor white para aceitar o tema
+            fig_line.update_layout(yaxis_tickformat="R$ ,.2s", margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig_line, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -244,7 +227,7 @@ with tab1:
             fig_pie = px.pie(df_final.groupby('Categoria')['Total_Gasto'].sum().reset_index(), 
                              values='Total_Gasto', names='Categoria', hole=0.6,
                              color_discrete_sequence=px.colors.qualitative.Prism)
-            fig_pie.update_layout(showlegend=False, margin=dict(l=20, r=20, t=40, b=20))
+            fig_pie.update_layout(showlegend=False, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig_pie, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -262,12 +245,13 @@ with tab2:
         has_risk = any("CRÍTICO" in x for x in mix_f['Categoria'])
         card_class = "card-critico" if has_risk else "card-ok"
         status_txt = "🚨 Fornecedor Crítico (EPI/Químico)" if has_risk else "✅ Fornecedor Geral"
+        status_color = "#dc3545" if has_risk else "#28a745"
 
-        # CARD HTML
+        # CARD HTML ADAPTATIVO
         st.markdown(f"""
         <div class="card-fornecedor {card_class}">
-            <h2 style="margin:0; color:#1a1a1a;">{forn_sel}</h2>
-            <p style="color:#666; font-size:14px;">CNPJ: {dados_f['cnpj_emit']}</p>
+            <h2 style="margin:0;">{forn_sel}</h2>
+            <p style="opacity:0.8; font-size:14px;">CNPJ: {dados_f['cnpj_emit']}</p>
             <div style="display:flex; justify-content:space-between; margin-top:20px;">
                 <div>
                     <p style="font-weight:bold; margin-bottom:5px;">📍 Localização</p>
@@ -278,13 +262,12 @@ with tab2:
                 <div style="text-align:right;">
                     <p style="font-weight:bold; margin-bottom:5px;">💵 Volume Total</p>
                     <h3 style="margin:0; color:#004280;">{format_brl(total_f)}</h3>
-                    <p style="color:{'#dc3545' if has_risk else '#28a745'}; font-weight:bold; margin-top:10px;">{status_txt}</p>
+                    <p style="color:{status_color}; font-weight:bold; margin-top:10px;">{status_txt}</p>
                 </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
         
-        st.write("")
         st.dataframe(
             mix_f[['desc_prod', 'Categoria', 'Exigencia', 'Total_Gasto']],
             column_config={
@@ -304,9 +287,10 @@ with tab3:
         fig_scatter = px.scatter(df_item, x='data_emissao', y='v_unit', color='nome_emit', size='qtd',
                                  title=f"Dispersão de Preços: {item_bid}",
                                  labels={'v_unit': 'Preço Unitário (R$)', 'data_emissao': 'Data', 'nome_emit': 'Fornecedor'})
-        fig_scatter.update_layout(plot_bgcolor='white', yaxis_tickformat="R$ ,.2f", xaxis_title=None)
-        fig_scatter.update_xaxes(showgrid=True, gridcolor='#eee')
-        fig_scatter.update_yaxes(showgrid=True, gridcolor='#eee')
+        # Removido plot_bgcolor para aceitar tema dark
+        fig_scatter.update_layout(yaxis_tickformat="R$ ,.2f", xaxis_title=None, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        fig_scatter.update_xaxes(showgrid=True, gridcolor='rgba(128,128,128,0.2)')
+        fig_scatter.update_yaxes(showgrid=True, gridcolor='rgba(128,128,128,0.2)')
         st.plotly_chart(fig_scatter, use_container_width=True)
 
 # --- TAB 4: PESQUISA (DATA EDITOR PRO) ---
@@ -322,17 +306,16 @@ with tab4:
     if cat_filtro:
         view = view[view['Categoria'].isin(cat_filtro)]
 
-    # AQUI ESTÁ O SEGREDO DO VISUAL PROFISSIONAL EM TABELAS:
     st.dataframe(
         view[['Categoria', 'desc_prod', 'Menor_Preco', 'Ultimo_Preco', 'Variacao_Preco', 'Ultimo_Forn', 'Ultima_Data']],
         column_config={
             "Categoria": st.column_config.TextColumn("Família", width="medium"),
             "desc_prod": st.column_config.TextColumn("Descrição", width="large"),
-            "Menor_Preco": st.column_config.NumberColumn("Melhor Preço (Hist)", format="R$ %.2f"),
+            "Menor_Preco": st.column_config.NumberColumn("Melhor Preço", format="R$ %.2f"),
             "Ultimo_Preco": st.column_config.NumberColumn("Último Pago", format="R$ %.2f"),
             "Variacao_Preco": st.column_config.ProgressColumn(
                 "Var. Preço (%)", 
-                help="O quanto pagamos a mais na última compra comparado ao mínimo histórico",
+                help="Variação vs Mínimo Histórico",
                 format="%.1f%%", 
                 min_value=0, 
                 max_value=1
