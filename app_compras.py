@@ -25,7 +25,7 @@ TEXT = {
         'select_year': "Selecione os anos fiscais",
         'exec_review': "📌 Visão Executiva",
         'total_spend': "💰 Gasto Total",
-        'tabs': ["📌 Visão Executiva", "📊 Dashboard", "📇 Gestão de Fornecedores", "📉 Histórico de Preços", "🔍 Busca Avançada"]
+        'tabs': ["📌 Visão Executiva", "📊 Dashboard", "📇 Gestão de Fornecedores", "💰 Cockpit de Negociação", "🔍 Busca Avançada"]
     },
     'en': {
         'title': "🏗️ Procurement Intelligence Portal",
@@ -33,7 +33,7 @@ TEXT = {
         'select_year': "Select fiscal years",
         'exec_review': "📌 Executive Review",
         'total_spend': "💰 Total Spend",
-        'tabs': ["📌 Executive Review", "📊 Dashboard", "📇 Vendor Management", "📉 Price History", "🔍 Advanced Search"]
+        'tabs': ["📌 Executive Review", "📊 Dashboard", "📇 Vendor Management", "💰 Negotiation Cockpit", "🔍 Advanced Search"]
     }
 }
 T = TEXT[APP_LANG]
@@ -42,6 +42,10 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+    
+    /* Esconde menu padrão para parecer app profissional */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
     
     div[data-testid="stMetric"] {
         background-color: var(--secondary-background-color);
@@ -274,31 +278,125 @@ with tab3:
         view_forn['Total'] = view_forn['Total_Gasto'].apply(format_brl)
         st.dataframe(view_forn[['cod_prod', 'desc_prod', 'Categoria', 'Total']], hide_index=True, use_container_width=True)
 
-# --- TAB 4: PREÇOS ---
+# --- TAB 4: INTELIGÊNCIA DE PREÇOS & NEGOCIAÇÃO (ATUALIZADA) ---
 with tab4:
-    st.markdown("### 📉 Evolução de Preços")
-    df_final['display'] = df_final['desc_prod'] + " | Ref: " + df_final['cod_prod']
-    item_sel = st.selectbox("Item:", df_final.sort_values('Total_Gasto', ascending=False)['display'].unique())
+    st.markdown("### 💰 Cockpit de Negociação")
+    st.caption("Identificação de oportunidades baseada na volatilidade de preços e dispersão entre fornecedores.")
 
-    if item_sel:
-        desc, cod = item_sel.split(" | Ref: ")
-        df_item = df[(df['desc_prod'] == desc) & (df['cod_prod'] == cod)].copy()
+    # 1. PREPARAÇÃO DOS DADOS PARA NEGOCIAÇÃO
+    # Agrupa por item para calcular a volatilidade
+    df_neg = df.groupby(['desc_prod', 'cod_prod', 'Categoria']).agg(
+        Gasto_Total=('v_total_item', 'sum'),
+        Qtd_Total=('qtd', 'sum'),
+        Preco_Medio=('v_unit', 'mean'),
+        Preco_Min=('v_unit', 'min'),
+        Preco_Max=('v_unit', 'max'),
+        Qtd_Compras=('n_nf', 'count') # Quantas vezes compramos
+    ).reset_index()
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Mínimo", format_brl(df_item['v_unit'].min()))
-        m2.metric("Máximo", format_brl(df_item['v_unit'].max()))
-        m3.metric("Média", format_brl(df_item['v_unit'].mean()))
+    # Filtra apenas itens comprados mais de uma vez (não dá para negociar variação de compra única)
+    df_neg = df_neg[df_neg['Qtd_Compras'] > 1].copy()
 
-        fig_line = px.line(df_item.sort_values('data_emissao'), x='data_emissao', y='v_unit', color='nome_emit', markers=True)
-        fig_line.update_layout(separators=",.", yaxis_tickformat=".2f")
-        st.plotly_chart(fig_line, use_container_width=True)
+    # Cálculo de Volatilidade (O quanto o preço oscila em %)
+    # Fórmula: (Máximo - Mínimo) / Mínimo
+    df_neg['Volatilidade_Preco'] = ((df_neg['Preco_Max'] - df_neg['Preco_Min']) / df_neg['Preco_Min']) * 100
+    
+    # Cálculo do "Dinheiro na Mesa" (Saving Teórico se tivéssemos pago sempre o mínimo)
+    df_neg['Saving_Potencial'] = (df_neg['Preco_Medio'] - df_neg['Preco_Min']) * df_neg['Qtd_Total']
+
+    # --- LAYOUT SUPERIOR: MATRIZ DE ATAQUE ---
+    col_matriz, col_kpis = st.columns([3, 1])
+
+    with col_matriz:
+        st.markdown("##### 🎯 Matriz de Ataque (Pareto de Volatilidade)")
+        # Gráfico de Dispersão: X=Gasto, Y=Volatilidade, Tamanho=Saving Potencial
+        fig_scatter = px.scatter(
+            df_neg.sort_values('Gasto_Total', ascending=False).head(50), # Top 50 itens para não poluir
+            x='Gasto_Total', 
+            y='Volatilidade_Preco',
+            size='Saving_Potencial',
+            color='Categoria',
+            hover_name='desc_prod',
+            log_x=True, # Escala logarítmica ajuda a ver melhor quando há disparidade de valores
+            text='desc_prod',
+            height=400
+        )
+        fig_scatter.update_traces(textposition='top center')
+        fig_scatter.update_layout(
+            xaxis_title="Volume Gasto (R$) - Escala Log",
+            yaxis_title="Variação de Preço (%)",
+            separators=",.",
+            showlegend=True
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+    with col_kpis:
+        st.markdown("##### 🚀 Oportunidades")
+        # Top itens com maior potencial de saving
+        top_saving = df_neg.sort_values('Saving_Potencial', ascending=False).head(3)
         
-        # Tabela Formatada
-        view_item = df_item[['data_emissao','nome_emit','n_nf','qtd','v_unit','v_total_item']].sort_values('data_emissao', ascending=False).copy()
-        view_item['Unitário'] = view_item['v_unit'].apply(format_brl)
-        view_item['Total'] = view_item['v_total_item'].apply(format_brl)
+        for index, row in top_saving.iterrows():
+            st.metric(
+                label=f"Oportunidade em {row['desc_prod'][:15]}...", # Corta nome longo
+                value=format_brl(row['Saving_Potencial']),
+                delta=f"Var: {row['Volatilidade_Preco']:.1f}%",
+                delta_color="normal" # Verde = bom, mas aqui queremos destacar o valor positivo
+            )
         
-        st.dataframe(view_item[['data_emissao','nome_emit','n_nf','qtd','Unitário','Total']], hide_index=True, use_container_width=True)
+        st.info("💡 **Dica:** Itens no topo direito do gráfico (Alto Gasto + Alta Variação) são prioritários para contratos fixos.")
+
+    st.divider()
+
+    # --- LAYOUT INFERIOR: DETALHE TÁTICO ---
+    st.markdown("##### 🕵️ Investigação Detalhada por Item")
+    
+    # Seletor inteligente (já traz os itens com maior volatilidade primeiro)
+    lista_ordenada = df_neg.sort_values('Saving_Potencial', ascending=False)['desc_prod'].unique()
+    item_investigar = st.selectbox("Selecione o material para analisar o histórico:", lista_ordenada)
+
+    if item_investigar:
+        # Pega os dados brutos daquele item
+        df_hist = df[df['desc_prod'] == item_investigar].sort_values('data_emissao')
+        
+        c1, c2 = st.columns([2, 1])
+        
+        with c1:
+            # Gráfico de Linha Temporal (Evolução do Preço)
+            fig_line = px.line(
+                df_hist, 
+                x='data_emissao', 
+                y='v_unit', 
+                markers=True,
+                title=f"Histórico de Preço: {item_investigar}",
+                color='nome_emit' # Mostra quem vendeu a qual preço
+            )
+            fig_line.update_layout(separators=",.", yaxis_tickformat=".2f")
+            st.plotly_chart(fig_line, use_container_width=True)
+            
+        with c2:
+            st.markdown("**Dispersão de Preços:**")
+            avg_price = df_hist['v_unit'].mean()
+            min_price = df_hist['v_unit'].min()
+            max_price = df_hist['v_unit'].max()
+            
+            st.metric("Preço Mínimo Pago", format_brl(min_price))
+            st.metric("Preço Máximo Pago", format_brl(max_price))
+            st.metric("Preço Médio", format_brl(avg_price))
+            
+            var_perc = ((max_price - min_price) / min_price) * 100
+            st.warning(f"⚠️ Variação de **{var_perc:.1f}%** entre compras.")
+            
+        # Tabela analítica das compras desse item
+        st.markdown("**Histórico de Compras:**")
+        view_hist = df_hist[['data_emissao', 'nome_emit', 'qtd', 'v_unit', 'v_total_item']].copy()
+        view_hist['Unitário'] = view_hist['v_unit'].apply(format_brl)
+        view_hist['Total'] = view_hist['v_total_item'].apply(format_brl)
+        
+        st.dataframe(
+            view_hist[['data_emissao', 'nome_emit', 'qtd', 'Unitário', 'Total']], 
+            use_container_width=True,
+            column_config={"data_emissao": st.column_config.DateColumn("Data", format="DD/MM/YYYY")}
+        )
 
 # --- TAB 5: BUSCA AVANÇADA ---
 with tab5:
