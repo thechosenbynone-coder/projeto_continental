@@ -4,27 +4,38 @@ import sqlite3
 import os
 import locale
 
-# --- IMPORTS DOS SEUS NOVOS MÓDULOS ---
+# --- IMPORTS DOS MÓDULOS (A Mágica Acontece Aqui) ---
 from styles.theme import aplicar_tema
 from utils.classifiers import classificar_material
-from utils.formatters import format_brl, format_perc
-from ui.tab_negociacao import render_tab_negociacao
+from utils.formatters import format_brl
 
-# Configuração da Página
+# Importando as abas
+from ui.tab_exec_review import render_tab_exec_review
+from ui.tab_dashboard import render_tab_dashboard
+from ui.tab_fornecedores import render_tab_fornecedores
+from ui.tab_negociacao import render_tab_negociacao
+from ui.tab_busca import render_tab_busca
+
+# =====================================================
+# CONFIGURAÇÃO GERAL
+# =====================================================
 st.set_page_config(page_title="Portal de Inteligência em Suprimentos", page_icon="🏗️", layout="wide")
+
+# Aplica o tema visual (CSS)
 aplicar_tema()
 
 # Detecta idioma
 lang, _ = locale.getdefaultlocale()
 APP_LANG = 'pt' if lang and lang.lower().startswith('pt') else 'en'
-
 TEXT = {
     'pt': {'title': "🏗️ Portal de Inteligência em Suprimentos", 'tabs': ["📌 Visão Executiva", "📊 Dashboard", "📇 Gestão de Fornecedores", "💰 Cockpit de Negociação", "🔍 Busca Avançada"]},
     'en': {'title': "🏗️ Procurement Intelligence Portal", 'tabs': ["📌 Executive Review", "📊 Dashboard", "📇 Vendor Management", "💰 Negotiation Cockpit", "🔍 Advanced Search"]}
 }
 T = TEXT[APP_LANG]
 
-# Carga de Dados
+# =====================================================
+# CARGA DE DADOS
+# =====================================================
 @st.cache_data
 def carregar_dados():
     if not os.path.exists("compras_suprimentos.db"): return pd.DataFrame()
@@ -52,31 +63,50 @@ def carregar_dados():
 
 df_full = carregar_dados()
 if df_full.empty:
-    st.error("⚠️ Base de dados vazia.")
+    st.error("⚠️ Base de dados vazia. Rode o extrator primeiro.")
     st.stop()
 
-# Filtros
+# =====================================================
+# FILTROS E PROCESSAMENTO
+# =====================================================
 st.title(T['title'])
 anos = sorted(df_full['ano'].unique())
 sel_anos = st.pills("Selecione Ano", anos, selection_mode="multi", default=anos)
-if not sel_anos: st.stop()
-df = df_full[df_full['ano'].isin(sel_anos)].copy()
 
-# --- APLICAÇÃO DA INTELIGÊNCIA (USANDO O MÓDULO NOVO) ---
-# Aqui usamos a função que importamos de utils.classifiers
+if not sel_anos:
+    st.warning("Selecione pelo menos um ano.")
+    st.stop()
+
+df = df_full[df_full['ano'].isin(sel_anos)].copy()
+st.divider()
+
+# --- APLICAÇÃO DA INTELIGÊNCIA ---
+# Classifica item a item
 df['Categoria'] = df.apply(classificar_material, axis=1)
 
-# --- RENDERIZAÇÃO DAS ABAS ---
+# Agrupamento Geral (usado em várias abas)
+df_grouped = df.groupby(['desc_prod','ncm','cod_prod', 'Categoria']).agg(
+    Total_Gasto=('v_total_item','sum'),
+    Qtd_Total=('qtd','sum'),
+    Menor_Preco=('v_unit','min')
+).reset_index()
+
+# Pega última compra para comparações
+df_last = df.sort_values('data_emissao').drop_duplicates(['desc_prod','ncm','cod_prod'], keep='last')[['desc_prod','ncm','cod_prod','v_unit','nome_emit','data_emissao']]
+df_last.rename(columns={'v_unit':'Ultimo_Preco', 'nome_emit':'Ultimo_Forn', 'data_emissao':'Ultima_Data'}, inplace=True)
+
+# Merge Final para análises consolidadas
+df_final = df_grouped.merge(df_last, on=['desc_prod','ncm','cod_prod'])
+df_final['Variacao_Preco'] = (df_final['Ultimo_Preco'] - df_final['Menor_Preco']) / df_final['Menor_Preco']
+df_final['Saving_Potencial'] = df_final['Total_Gasto'] - (df_final['Menor_Preco'] * df_final['Qtd_Total'])
+
+# =====================================================
+# INTERFACE (RENDERIZAÇÃO)
+# =====================================================
 tab1, tab2, tab3, tab4, tab5 = st.tabs(T['tabs'])
 
-# Aba 1: Executiva (Código simplificado mantido aqui por enquanto)
-with tab1:
-    st.metric("💰 Gasto Total", format_brl(df['v_total_item'].sum()))
-    st.metric("💸 Imposto Total", format_brl(df['Imposto_Total'].sum()))
-
-# Aba 4: Negociação (Agora chama o módulo externo!)
-with tab4:
-    render_tab_negociacao(df)
-
-# (Nota: As outras abas precisam ter seu código migrado para pastas 'ui' também, 
-# mas com essa estrutura o sistema já roda a aba de negociação de forma modular)
+with tab1: render_tab_exec_review(df, df_final)
+with tab2: render_tab_dashboard(df, df_final)
+with tab3: render_tab_fornecedores(df, df_final)
+with tab4: render_tab_negociacao(df) # Esta aba calcula seus próprios agregados
+with tab5: render_tab_busca(df_final)
