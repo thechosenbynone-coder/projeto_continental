@@ -149,6 +149,19 @@ The score consolidates multiple dimensions into a single, actionable indicator:
 
 When ERP delivery data is unavailable, **lead time is captured through user-validated operational input**, reflecting real-world procurement workflows. This approach ensures the model remains practical, accurate, and aligned with how procurement teams actually operate.
 
+### How the Supplier Score is Used
+
+The Supplier Score is not a static metric; it is designed as a **decision-support tool** embedded directly into procurement workflows.
+
+Typical use cases include:
+
+* **Supplier comparison** – Quickly identifying the most competitive and reliable suppliers for a given category or item
+* **Negotiation preparation** – Supporting discussions with objective performance data (price history, delivery performance, compliance)
+* **Risk awareness** – Highlighting suppliers with compliance or delivery risks
+* **Sourcing prioritization** – Guiding buyers toward suppliers that combine cost efficiency and operational reliability
+
+By placing the score **directly alongside each supplier**, the platform reduces analytical friction and enables faster, data-driven decisions at both operational and strategic levels.
+
 All intelligence is applied **before** data reaches the dashboards, ensuring consistency across the application.
 
 ---
