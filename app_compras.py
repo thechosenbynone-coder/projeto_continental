@@ -8,7 +8,8 @@ import locale
 from styles.theme import aplicar_tema
 from utils.classifiers import classificar_materiais_turbo
 from utils.formatters import format_brl, format_perc
-from utils.normalizer import normalizar_unidades_v1 # <--- IMPORT NOVO (NORMALIZADOR)
+from utils.normalizer import normalizar_unidades_v1
+from utils.compliance import validar_compliance # <--- NOVO: IMPORT DO AUDITOR
 
 # Importando as funções das abas
 from ui.tab_exec_review import render_tab_exec_review
@@ -46,7 +47,7 @@ TEXT = {
 T = TEXT[APP_LANG]
 
 # =====================================================
-# 2. CARREGAMENTO DE DADOS E INTELIGÊNCIA
+# 2. CARREGAMENTO DE DADOS E NORMALIZAÇÃO
 # =====================================================
 @st.cache_data
 def carregar_dados():
@@ -91,14 +92,19 @@ if df_full.empty:
     st.stop()
 
 # =====================================================
-# 3. PROCESSAMENTO GLOBAL
+# 3. PROCESSAMENTO GLOBAL (INTELIGÊNCIA)
 # =====================================================
-# Aplicamos a classificação na BASE COMPLETA (df_full)
-# Isso é vital para que a Aba de Busca (Tab 5) tenha as categorias, mesmo sem filtro de ano.
+
+# A) Classificação Turbo (Taxonomia)
+# Aplica categorias (Químico, EPI, Hidráulica...) na base completa
 df_full['Categoria'] = classificar_materiais_turbo(df_full)
 
+# B) Auditoria de Compliance (NOVO)
+# Verifica se EPIs têm CA e marca riscos
+df_full = validar_compliance(df_full)
+
 # =====================================================
-# 4. SIDEBAR (FILTROS PARA AS OUTRAS ABAS)
+# 4. SIDEBAR (FILTROS)
 # =====================================================
 with st.sidebar:
     st.title("⚙️ Filtros")
@@ -112,8 +118,8 @@ with st.sidebar:
 # Cria o DataFrame filtrado para as abas de análise (1, 2, 3, 4)
 df = df_full[df_full['ano'].isin(sel_anos)].copy()
 
-# Agregações para as abas de análise (usando dados filtrados)
-# Nota: Usamos v_unit e qtd originais para total financeiro, mas v_unit_real pode ser usado para médias
+# Agregações para as abas de análise
+# Nota: O 'Risco_Compliance' será propagado automaticamente pois está no df original
 df_grouped = df.groupby(['desc_prod', 'ncm', 'cod_prod', 'Categoria']).agg(
     Total_Gasto=('v_total_item', 'sum'),
     Qtd_Total=('qtd', 'sum'),
@@ -140,4 +146,4 @@ with tab1: render_tab_exec_review(df, df_final)
 with tab2: render_tab_dashboard(df, df_final)
 with tab3: render_tab_fornecedores(df, df_final)
 with tab4: render_tab_negociacao(df)
-with tab5: render_tab_busca(df_full) # <--- AQUI: Passamos a base COMPLETA para a busca
+with tab5: render_tab_busca(df_full) # Passamos a base completa (com compliance) para a busca
