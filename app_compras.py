@@ -9,7 +9,7 @@ from styles.theme import aplicar_tema
 from utils.classifiers import classificar_materiais_turbo
 from utils.formatters import format_brl, format_perc
 from utils.normalizer import normalizar_unidades_v1
-from utils.compliance import validar_compliance # <--- NOVO: IMPORT DO AUDITOR
+from utils.compliance import validar_compliance
 
 # Importando as funções das abas
 from ui.tab_exec_review import render_tab_exec_review
@@ -27,7 +27,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Aplica o tema visual centralizado
 aplicar_tema()
 
 # Configuração de Idioma
@@ -47,7 +46,7 @@ TEXT = {
 T = TEXT[APP_LANG]
 
 # =====================================================
-# 2. CARREGAMENTO DE DADOS E NORMALIZAÇÃO
+# 2. CARREGAMENTO DE DADOS
 # =====================================================
 @st.cache_data
 def carregar_dados():
@@ -61,26 +60,23 @@ def carregar_dados():
     if df.empty:
         return pd.DataFrame()
 
-    # Tratamentos de data e texto
+    # Tratamentos básicos
     df['data_emissao'] = pd.to_datetime(df['data_emissao'])
     df['ano'] = df['data_emissao'].dt.year
     df['mes_ano'] = df['data_emissao'].dt.strftime('%Y-%m')
     df['desc_prod'] = df['desc_prod'].astype(str).str.upper().str.strip()
     df['ncm'] = df['ncm'].astype(str).str.replace('.', '', regex=False)
 
-    # Cálculo de Impostos
+    # Impostos
     cols_imposto = ['v_icms', 'v_ipi', 'v_pis', 'v_cofins', 'v_iss']
     for col in cols_imposto:
-        if col not in df.columns:
-            df[col] = 0.0
+        if col not in df.columns: df[col] = 0.0
     df['Imposto_Total'] = df[cols_imposto].sum(axis=1)
 
-    if 'cod_prod' not in df.columns:
-        df['cod_prod'] = ''
+    if 'cod_prod' not in df.columns: df['cod_prod'] = ''
     df['cod_prod'] = df['cod_prod'].astype(str)
     
-    # --- APLICAÇÃO DO DETETIVE DE UNIDADES (CX vs UN) ---
-    # Isso cria as colunas: 'v_unit_real', 'qtd_real', 'un_real'
+    # Normalização de Unidades (CX -> UN)
     df = normalizar_unidades_v1(df)
 
     return df
@@ -92,19 +88,36 @@ if df_full.empty:
     st.stop()
 
 # =====================================================
-# 3. PROCESSAMENTO GLOBAL (INTELIGÊNCIA)
+# 3. INTELIGÊNCIA GLOBAL (BASE COMPLETA)
 # =====================================================
 
-# A) Classificação Turbo (Taxonomia)
-# Aplica categorias (Químico, EPI, Hidráulica...) na base completa
+# 1. Classificação
 df_full['Categoria'] = classificar_materiais_turbo(df_full)
 
-# B) Auditoria de Compliance (NOVO)
-# Verifica se EPIs têm CA e marca riscos
+# 2. Compliance
 df_full = validar_compliance(df_full)
 
+# 3. Preparação de Dados para Abas "Sem Filtro" (Vendor Management)
+# Precisamos de um 'df_final' calculado sobre a base TODA para comparar preços históricos
+# IMPORTANTE: Usamos v_unit_real e qtd_real para precisão
+df_grouped_full = df_full.groupby(['desc_prod', 'ncm', 'cod_prod', 'Categoria']).agg(
+    Total_Gasto=('v_total_item', 'sum'),
+    Qtd_Total=('qtd_real', 'sum'), 
+    Menor_Preco=('v_unit_real', 'min') 
+).reset_index()
+
+# Tabela auxiliar (apenas para manter estrutura compatível, embora Menor_Preco seja o principal)
+df_last_full = (
+    df_full.sort_values('data_emissao')
+    .drop_duplicates(['desc_prod', 'ncm', 'cod_prod'], keep='last')
+    [['desc_prod', 'ncm', 'cod_prod', 'v_unit_real', 'nome_emit', 'data_emissao']]
+)
+
+df_final_full = df_grouped_full.merge(df_last_full, on=['desc_prod', 'ncm', 'cod_prod'])
+
+
 # =====================================================
-# 4. SIDEBAR (FILTROS)
+# 4. SIDEBAR E FILTROS (PARA O RESTO DO APP)
 # =====================================================
 with st.sidebar:
     st.title("⚙️ Filtros")
@@ -115,35 +128,39 @@ with st.sidebar:
         st.warning("Selecione um ano.")
         st.stop()
 
-# Cria o DataFrame filtrado para as abas de análise (1, 2, 3, 4)
+# Cria o DataFrame filtrado APENAS para as abas gerenciais (Dashboards)
 df = df_full[df_full['ano'].isin(sel_anos)].copy()
 
-# Agregações para as abas de análise
-# Nota: O 'Risco_Compliance' será propagado automaticamente pois está no df original
+# Agregações para as abas filtradas (Review, Dashboard, Negociação)
 df_grouped = df.groupby(['desc_prod', 'ncm', 'cod_prod', 'Categoria']).agg(
     Total_Gasto=('v_total_item', 'sum'),
-    Qtd_Total=('qtd', 'sum'),
-    Menor_Preco=('v_unit', 'min')
+    Qtd_Total=('qtd_real', 'sum'),
+    Menor_Preco=('v_unit_real', 'min')
 ).reset_index()
 
 df_last = (
     df.sort_values('data_emissao')
       .drop_duplicates(['desc_prod', 'ncm', 'cod_prod'], keep='last')
-      [['desc_prod', 'ncm', 'cod_prod', 'v_unit', 'nome_emit', 'data_emissao']]
-      .rename(columns={'v_unit': 'Ultimo_Preco', 'nome_emit': 'Ultimo_Forn', 'data_emissao': 'Ultima_Data'})
+      [['desc_prod', 'ncm', 'cod_prod', 'v_unit_real', 'nome_emit', 'data_emissao']]
+      .rename(columns={'v_unit_real': 'Ultimo_Preco', 'nome_emit': 'Ultimo_Forn', 'data_emissao': 'Ultima_Data'})
 )
 
 df_final = df_grouped.merge(df_last, on=['desc_prod', 'ncm', 'cod_prod'])
 df_final['Saving_Potencial'] = df_final['Total_Gasto'] - (df_final['Menor_Preco'] * df_final['Qtd_Total'])
 
 # =====================================================
-# 5. RENDERIZAÇÃO DAS ABAS
+# 5. RENDERIZAÇÃO
 # =====================================================
 st.title(T['title'])
 tab1, tab2, tab3, tab4, tab5 = st.tabs(T['tabs'])
 
+# Abas que respeitam o filtro de ano (Análise Tática)
 with tab1: render_tab_exec_review(df, df_final)
 with tab2: render_tab_dashboard(df, df_final)
-with tab3: render_tab_fornecedores(df, df_final)
-with tab4: render_tab_negociacao(df)
-with tab5: render_tab_busca(df_full) # Passamos a base completa (com compliance) para a busca
+
+# Abas que mostram TUDO (Histórico/Inteligência)
+# AQUI ESTÁ A MUDANÇA: Tab 3 agora recebe df_full e df_final_full
+with tab3: render_tab_fornecedores(df_full, df_final_full) 
+
+with tab4: render_tab_negociacao(df) # Negociação geralmente foca no ano corrente/recente
+with tab5: render_tab_busca(df_full) # Busca é sempre full
