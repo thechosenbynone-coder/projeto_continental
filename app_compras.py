@@ -17,7 +17,7 @@ from ui.tab_fornecedores import render_tab_fornecedores
 from ui.tab_negociacao import render_tab_negociacao
 from ui.tab_busca import render_tab_busca
 
-# 1. CONFIGURAÇÃO (NOME ORIGINAL RESTAURADO)
+# 1. CONFIGURAÇÃO
 st.set_page_config(
     page_title="Portal de Inteligência em Suprimentos", 
     page_icon="🏗️", 
@@ -59,7 +59,7 @@ if df_full.empty:
 df_full['Categoria'] = classificar_materiais_turbo(df_full)
 df_full = validar_compliance(df_full)
 
-# Estatísticas GLOBAIS (Histórico Completo)
+# Estatísticas GLOBAIS (Histórico Completo) - Usado no Vendor Management
 df_grouped_full = df_full.groupby(['desc_prod', 'ncm', 'cod_prod', 'Categoria']).agg(
     Total_Gasto=('v_total_item', 'sum'),
     Qtd_Total=('qtd_real', 'sum'), 
@@ -73,9 +73,10 @@ df_last_full = (
 )
 df_final_full = df_grouped_full.merge(df_last_full, on=['desc_prod', 'ncm', 'cod_prod'])
 
-# 4. SIDEBAR
+# 4. SIDEBAR (FILTRO DE ANO - TÁTICO)
 with st.sidebar:
     st.title("⚙️ Filtros")
+    st.caption("Filtros afetam apenas as abas 'Visão Executiva' e 'Dashboard'.")
     anos = sorted(df_full['ano'].unique(), reverse=True)
     sel_anos = st.multiselect("Anos Fiscais:", options=anos, default=anos[:1])
     if not sel_anos: st.stop()
@@ -102,8 +103,11 @@ df_final_filtered['Saving_Potencial'] = df_final_filtered['Total_Gasto'] - (df_f
 st.title("🏗️ Portal de Inteligência em Suprimentos")
 tabs = st.tabs(["📌 Visão Executiva", "📊 Dashboard", "📇 Gestão de Fornecedores", "💰 Cockpit", "🔍 Busca"])
 
+# Abas Táticas (Respeitam Ano)
 with tabs[0]: render_tab_exec_review(df_filtered, df_final_filtered)
 with tabs[1]: render_tab_dashboard(df_filtered, df_final_filtered)
-with tabs[2]: render_tab_fornecedores(df_full, df_final_full) # Base Full
-with tabs[3]: render_tab_negociacao(df_filtered)
-with tabs[4]: render_tab_busca(df_full) # Base Full
+
+# Abas Estratégicas (Histórico Completo)
+with tabs[2]: render_tab_fornecedores(df_full, df_final_full) 
+with tabs[3]: render_tab_negociacao(df_full) # <--- MUDANÇA AQUI (AGORA É FULL)
+with tabs[4]: render_tab_busca(df_full)
