@@ -136,6 +136,19 @@ Key analytical features include:
 * Consolidated tax calculation
 * Savings potential estimation
 
+### Supplier Scoring Model
+
+The platform includes an **implemented supplier scoring model**, designed to support sourcing, negotiation, and supplier management decisions.
+
+The score consolidates multiple dimensions into a single, actionable indicator:
+
+* **Price performance** – historical unit prices and competitiveness
+* **Compliance status** – fiscal and operational conformity
+* **Spend relevance & stability** – volume and consistency over time
+* **Lead Time (Delivery Performance)** – average delivery time in days
+
+When ERP delivery data is unavailable, **lead time is captured through user-validated operational input**, reflecting real-world procurement workflows. This approach ensures the model remains practical, accurate, and aligned with how procurement teams actually operate.
+
 All intelligence is applied **before** data reaches the dashboards, ensuring consistency across the application.
 
 ---
@@ -170,7 +183,7 @@ It demonstrates capabilities aligned with roles such as:
 
 ## 👤 Author
 
-Developed by **ChosenByNone** as a professional portfolio project focused on **data-driven procurement solutions**.
+Developed by **Lucas Lima** as a professional portfolio project focused on **data-driven procurement solutions**.
 
 If you are interested in collaboration, consulting, or analytics-driven procurement solutions, feel free to connect.
 
