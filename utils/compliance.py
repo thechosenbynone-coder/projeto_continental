@@ -3,29 +3,45 @@ import re
 
 def extrair_ca_epi(texto):
     """
-    Usa a Regex do relatório para achar Certificado de Aprovação.
-    Padrão: CA 12345, CA: 12345, CA-12345
+    Tenta extrair o número do CA (Certificado de Aprovação) da descrição.
+    Padrão: CA 1234, CA: 12345, C.A. 1234
     """
     if not isinstance(texto, str): return None
-    # Regex sugerida no relatório: (?i)\bCA[:\s.-]*(\d{4,6})\b
-    match = re.search(r'(?i)\bCA[:\s.-]*(\d{3,6})\b', texto)
+    
+    # Regex robusta para capturar "CA" seguido de números
+    # Aceita: "CA 12345", "CA: 12345", "C.A 12345"
+    match = re.search(r'(?i)\bC\.?A\.?[:\s.-]*(\d{3,6})\b', texto)
+    
     if match:
         return match.group(1)
     return None
 
 def validar_compliance(df):
     """
-    Roda verificações de segurança baseadas no SUP-PC-05.
+    Aplica regras de compliance na base de dados.
+    1. Para itens categorizados como EPI, verifica se existe CA.
+    2. Cria coluna 'Compliance_OK' e 'Motivo_Risco'.
     """
     df = df.copy()
     
-    # 1. Extração de CA para EPIs
-    # Só tenta extrair se for categorizado como EPI
-    mask_epi = df['Categoria'].str.contains('EPI')
-    df.loc[mask_epi, 'Numero_CA'] = df.loc[mask_epi, 'desc_prod'].apply(extrair_ca_epi)
-    
-    # 2. Flag de Risco: EPI sem CA
+    # Inicializa colunas
+    df['Numero_CA'] = None
     df['Risco_Compliance'] = False
-    df.loc[mask_epi & df['Numero_CA'].isna(), 'Risco_Compliance'] = True
+    df['Motivo_Risco'] = None
+    
+    # --- REGRA 1: EPI SEM CA ---
+    # Filtra apenas o que o classificador marcou como EPI
+    mask_epi = df['Categoria'].str.contains('EPI', na=False)
+    
+    if mask_epi.any():
+        # Tenta extrair o CA da descrição
+        df.loc[mask_epi, 'Numero_CA'] = df.loc[mask_epi, 'desc_prod'].apply(extrair_ca_epi)
+        
+        # Onde é EPI e o CA é Nulo -> Risco!
+        mask_risco_epi = mask_epi & df['Numero_CA'].isna()
+        df.loc[mask_risco_epi, 'Risco_Compliance'] = True
+        df.loc[mask_risco_epi, 'Motivo_Risco'] = 'EPI sem nº CA na descrição'
+
+    # (Futuramente você pode adicionar regras para Químicos sem Licença, etc.)
     
     return df
