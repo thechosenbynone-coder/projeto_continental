@@ -35,9 +35,15 @@ def normalizar_unidades_v1(df):
     """
     df = df.copy()
     
+    # --- CORREÇÃO AQUI: Usa 'u_medida' (nome no banco) em vez de 'unid' ---
+    col_unidade = 'u_medida' if 'u_medida' in df.columns else 'unid'
+    
     # 1. Normalização de Texto (Limpeza Básica)
-    # Transforma CXA, CX., CAIXA -> CX
-    df['un_limpa'] = df['unid'].astype(str).str.upper().str.strip()
+    if col_unidade in df.columns:
+        df['un_limpa'] = df[col_unidade].astype(str).str.upper().str.strip()
+    else:
+        df['un_limpa'] = 'UN' # Fallback se a coluna não existir
+        
     mapeamento = {
         'CXA': 'CX', 'CAIXA': 'CX', 'CT': 'CX',
         'PC': 'UN', 'PÇ': 'UN', 'PCA': 'UN', 'PECA': 'UN', 
@@ -56,7 +62,6 @@ def normalizar_unidades_v1(df):
     df = df.merge(stats, on='desc_prod', how='left')
     
     # Calcula a razão: Preço da Compra / Preço Mediano
-    # Se o preço for R$ 100 e a mediana R$ 1, ratio = 100.
     df['ratio_preco'] = df['v_unit'] / df['preco_mediano_ref']
     
     # --- LÓGICA DE DECISÃO ---
@@ -67,11 +72,9 @@ def normalizar_unidades_v1(df):
         if row['fator_txt'] > 1:
             fator = row['fator_txt']
             
-        # Se é uma CAIXA/PACOTE e o preço é muito maior que a mediana (ex: > 5x)
+        # Se é uma CAIXA/PACOTE e o preço é muito maior que a mediana (ex: > 4x)
         elif row['un_limpa'] in ['CX', 'PCT', 'EMB', 'FD', 'FARDO'] and row['ratio_preco'] > 4:
-            # Tenta arredondar para o inteiro mais próximo (ex: ratio 11.8 -> 12)
             fator_estatistico = round(row['ratio_preco'])
-            # Só aceita se for um número "redondo" ou plausível (evita erros de flutuação)
             if fator_estatistico > 1:
                 fator = fator_estatistico
         
