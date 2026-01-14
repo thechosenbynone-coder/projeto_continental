@@ -4,12 +4,13 @@ import sqlite3
 import os
 import locale
 
-# --- IMPORTS DOS TEUS MÓDULOS ---
+# --- IMPORTS DOS MÓDULOS ---
 from styles.theme import aplicar_tema
 from utils.classifiers import classificar_materiais_turbo
 from utils.formatters import format_brl, format_perc
+from utils.normalizer import normalizar_unidades_v1 # <--- IMPORT NOVO (NORMALIZADOR)
 
-# Importando as funções das abas (Devem estar preenchidas nos arquivos da pasta ui)
+# Importando as funções das abas
 from ui.tab_exec_review import render_tab_exec_review
 from ui.tab_dashboard import render_tab_dashboard
 from ui.tab_fornecedores import render_tab_fornecedores
@@ -45,7 +46,7 @@ TEXT = {
 T = TEXT[APP_LANG]
 
 # =====================================================
-# 2. CARREGAMENTO DE DADOS
+# 2. CARREGAMENTO DE DADOS E INTELIGÊNCIA
 # =====================================================
 @st.cache_data
 def carregar_dados():
@@ -76,6 +77,10 @@ def carregar_dados():
     if 'cod_prod' not in df.columns:
         df['cod_prod'] = ''
     df['cod_prod'] = df['cod_prod'].astype(str)
+    
+    # --- APLICAÇÃO DO DETETIVE DE UNIDADES (CX vs UN) ---
+    # Isso cria as colunas: 'v_unit_real', 'qtd_real', 'un_real'
+    df = normalizar_unidades_v1(df)
 
     return df
 
@@ -86,7 +91,14 @@ if df_full.empty:
     st.stop()
 
 # =====================================================
-# 3. SIDEBAR E FILTROS
+# 3. PROCESSAMENTO GLOBAL
+# =====================================================
+# Aplicamos a classificação na BASE COMPLETA (df_full)
+# Isso é vital para que a Aba de Busca (Tab 5) tenha as categorias, mesmo sem filtro de ano.
+df_full['Categoria'] = classificar_materiais_turbo(df_full)
+
+# =====================================================
+# 4. SIDEBAR (FILTROS PARA AS OUTRAS ABAS)
 # =====================================================
 with st.sidebar:
     st.title("⚙️ Filtros")
@@ -97,15 +109,11 @@ with st.sidebar:
         st.warning("Selecione um ano.")
         st.stop()
 
+# Cria o DataFrame filtrado para as abas de análise (1, 2, 3, 4)
 df = df_full[df_full['ano'].isin(sel_anos)].copy()
 
-# =====================================================
-# 4. PROCESSAMENTO (USANDO OS NOVOS MÓDULOS)
-# =====================================================
-# Usa o classificador vetorizado para alta performance
-df['Categoria'] = classificar_materiais_turbo(df)
-
-# Agregações para as abas de análise
+# Agregações para as abas de análise (usando dados filtrados)
+# Nota: Usamos v_unit e qtd originais para total financeiro, mas v_unit_real pode ser usado para médias
 df_grouped = df.groupby(['desc_prod', 'ncm', 'cod_prod', 'Categoria']).agg(
     Total_Gasto=('v_total_item', 'sum'),
     Qtd_Total=('qtd', 'sum'),
@@ -132,5 +140,4 @@ with tab1: render_tab_exec_review(df, df_final)
 with tab2: render_tab_dashboard(df, df_final)
 with tab3: render_tab_fornecedores(df, df_final)
 with tab4: render_tab_negociacao(df)
-with tab5: render_tab_busca(df_full)
-
+with tab5: render_tab_busca(df_full) # <--- AQUI: Passamos a base COMPLETA para a busca
