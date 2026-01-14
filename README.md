@@ -184,13 +184,35 @@ It demonstrates capabilities aligned with roles such as:
 
 ---
 
-## 🚀 Future Improvements
+🚀 Future Improvements
 
-* Full internationalization (EN)
-* Automated ETL scheduling
-* Supplier scoring model
-* Price prediction using machine learning
-* Cloud deployment (AWS / GCP / Azure)
+The platform roadmap includes advanced procurement workflow integration to further enhance operational analytics and supplier performance measurement.
+
+Planned enhancements include:
+
+Purchase-to-Pay (P2P) integration – Association between Purchase Requisitions, Purchase Orders, and Invoices
+
+Material fulfillment tracking – Measurement of request fulfillment based on the full procurement lifecycle:
+
+Material requisition created
+
+Purchase order issued
+
+Supplier delivery and invoice received
+
+Service level analytics – Calculation of fulfillment rate, delivery adherence, and material availability
+
+This integration is intentionally designed as a flexible framework, recognizing that procurement workflows vary significantly across organizations. The goal is not to enforce a single process, but to provide a configurable analytical layer capable of adapting to different ERP structures and purchasing models.
+
+Additional planned improvements:
+
+Automated ETL scheduling
+
+Extended supplier scoring with fulfillment and SLA metrics
+
+Price trend forecasting using machine learning
+
+Cloud deployment (AWS / GCP / Azure)
 
 ---
 
