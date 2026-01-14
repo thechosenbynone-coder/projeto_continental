@@ -3,10 +3,10 @@ import pandas as pd
 from utils.formatters import format_brl
 
 def render_tab_busca(df_full):
-    # Importante: Recebemos df_full (Base Completa) e não a filtrada por ano.
+    # Importante: Recebemos df_full (Base Completa) com colunas normalizadas (v_unit_real)
     
     st.markdown("### 🔍 Banco de Preços (Histórico Completo)")
-    st.caption("Pesquise em todo o histórico de compras da empresa, independente do ano fiscal.")
+    st.caption("Pesquise em todo o histórico de compras da empresa. Preços normalizados (CX -> UN) para equalização.")
 
     # 1. BARRA DE PESQUISA (Começa vazia e limpa)
     c1, c2 = st.columns([3, 1])
@@ -19,9 +19,12 @@ def render_tab_busca(df_full):
         )
         
     with c2:
-        # Filtro de categoria opcional para refinar
-        cats_disponiveis = sorted(df_full['Categoria'].unique())
-        filtro_cat = st.selectbox("Filtrar Categoria (Opcional)", options=["Todas"] + cats_disponiveis)
+        # Filtro de categoria
+        if 'Categoria' in df_full.columns:
+            cats_disponiveis = sorted(df_full['Categoria'].unique())
+            filtro_cat = st.selectbox("Filtrar Categoria (Opcional)", options=["Todas"] + cats_disponiveis)
+        else:
+            filtro_cat = "Todas"
 
     st.divider()
 
@@ -35,8 +38,9 @@ def render_tab_busca(df_full):
     
     # Filtro de Texto (Case insensitive)
     if termo_busca:
-        mask_desc = df_result['desc_prod'].str.contains(termo_busca.upper())
-        mask_cod = df_result['cod_prod'].str.contains(termo_busca.upper())
+        termo = termo_busca.upper().strip()
+        mask_desc = df_result['desc_prod'].str.contains(termo)
+        mask_cod = df_result['cod_prod'].str.contains(termo)
         df_result = df_result[mask_desc | mask_cod]
     
     # Filtro de Categoria
@@ -47,42 +51,44 @@ def render_tab_busca(df_full):
         st.warning("Nenhum item encontrado com esses critérios.")
         return
 
-    # 3. CONSTRUÇÃO DA TABELA INTELIGENTE
-    # Agrupamos por Produto para tirar a média e achar o "Campeão"
+    # 3. CONSTRUÇÃO DA TABELA INTELIGENTE (EQUALIZADA)
     
-    # Primeiro, achamos quem tem o menor preço para cada item (O "Melhor Fornecedor" por preço)
-    idx_min_price = df_result.groupby('desc_prod')['v_unit'].idxmin()
-    df_best_suppliers = df_result.loc[idx_min_price, ['desc_prod', 'nome_emit', 'v_unit', 'data_emissao']]
-    df_best_suppliers.rename(columns={
+    # A) Achar o Melhor Fornecedor usando PREÇO REAL (Normalizado)
+    # Isso evita que o fornecedor que vendeu 1 Unidade ganhe do que vendeu 1 Caixa (se a caixa for mais barata no unitário)
+    idx_min_price = df_result.groupby('desc_prod')['v_unit_real'].idxmin()
+    df_best = df_result.loc[idx_min_price, ['desc_prod', 'nome_emit', 'v_unit_real', 'data_emissao']]
+    df_best.rename(columns={
         'nome_emit': 'Melhor Fornecedor', 
-        'v_unit': 'Melhor Preço',
+        'v_unit_real': 'Melhor Preço (Eq.)',
         'data_emissao': 'Data Ref.'
     }, inplace=True)
 
-    # Agora agrupamos as estatísticas gerais
+    # B) Estatísticas Gerais
     df_view = df_result.groupby(['desc_prod', 'Categoria', 'cod_prod']).agg(
-        Preco_Medio=('v_unit', 'mean'),
-        Ultimo_Preco=('v_unit', 'last'), # Assume que o df já está ordenado por data no carregamento
+        Preco_Medio=('v_unit_real', 'mean'), # Média do preço REAL (convertido)
+        Ultimo_Preco=('v_unit_real', 'last'), # Último preço REAL
+        Unidade_Padrao=('un_real', lambda x: x.mode()[0] if not x.mode().empty else 'UN'), # Unidade mais comum
         Qtd_Compras=('n_nf', 'count')
     ).reset_index()
 
-    # Juntamos as duas informações
-    df_view = df_view.merge(df_best_suppliers, on='desc_prod')
+    # C) Merge das Informações
+    df_view = df_view.merge(df_best, on='desc_prod')
 
-    # Limita resultados para não travar (Top 100 mais comprados)
+    # Limita resultados para performance (Top 100 mais frequentes)
     df_view = df_view.sort_values('Qtd_Compras', ascending=False).head(100)
 
-    # Formatação Visual
-    df_view['Preço Médio'] = df_view['Preco_Medio'].apply(format_brl)
-    df_view['Melhor Preço'] = df_view['Melhor Preço'].apply(format_brl)
+    # D) Formatação Visual
+    df_view['Preço Médio (Eq.)'] = df_view['Preco_Medio'].apply(format_brl)
+    df_view['Melhor Preço (Eq.)'] = df_view['Melhor Preço (Eq.)'].apply(format_brl)
     
     # Seleção final de colunas
     cols_to_show = [
         'Categoria', 
         'desc_prod', 
-        'Preço Médio', 
+        'Unidade_Padrao',
+        'Preço Médio (Eq.)', 
         'Melhor Fornecedor', 
-        'Melhor Preço', 
+        'Melhor Preço (Eq.)', 
         'Data Ref.',
         'Qtd_Compras'
     ]
@@ -91,9 +97,11 @@ def render_tab_busca(df_full):
         df_view[cols_to_show],
         column_config={
             "desc_prod": "Descrição do Material",
-            "Data Ref.": st.column_config.DateColumn("Melhor Compra em", format="DD/MM/YYYY"),
-            "Qtd_Compras": st.column_config.NumberColumn("Freq.", help="Quantas vezes já compramos"),
-            "Melhor Fornecedor": st.column_config.TextColumn("Melhor Fornecedor (Preço)", help="Fornecedor que praticou o menor preço histórico")
+            "Unidade_Padrao": st.column_config.TextColumn("Unid.", help="Unidade normalizada (ex: CX virou UN)"),
+            "Preço Médio (Eq.)": st.column_config.TextColumn("Preço Médio", help="Preço equalizado para a unidade padrão"),
+            "Melhor Preço (Eq.)": st.column_config.TextColumn("Melhor Preço", help="Menor preço histórico encontrado (equalizado)"),
+            "Data Ref.": st.column_config.DateColumn("Melhor Compra", format="DD/MM/YYYY"),
+            "Qtd_Compras": st.column_config.NumberColumn("Freq.", help="Quantas vezes já compramos")
         },
         use_container_width=True,
         hide_index=True
