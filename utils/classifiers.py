@@ -1,30 +1,23 @@
-def classificar_material(row):
+import numpy as np
+import pandas as pd
+
+def classificar_materiais_turbo(df):
     """
-    Recebe uma linha do DataFrame (com desc_prod e ncm) e retorna a categoria.
-    Agora inclui regras para ÓCULOS, MÁSCARAS e NCM 9004.
+    Classificação vetorizada de alta performance.
     """
-    # Garante que os campos sejam strings para evitar erro
-    desc = str(row['desc_prod']).upper()
-    ncm = str(row['ncm']).replace('.', '')
+    desc = df['desc_prod'].str.upper().str.strip()
+    ncm = df['ncm'].astype(str).str.replace('.', '', regex=False)
     
-    # REGRA 1: QUÍMICOS
-    if ncm.startswith(('2710','3403')) or any(x in desc for x in ['OLEO','GRAXA','SOLVENTE']): 
-        return '🔴 QUÍMICO (CRÍTICO)'
+    # Definição das condições
+    cond_quimico = ncm.str.startswith(('2710', '3403')) | desc.str.contains('OLEO|GRAXA|SOLVENTE', regex=True)
+    cond_icamento = desc.str.contains('CABO DE ACO|MANILHA|CINTA DE ELEVACAO', regex=True)
+    cond_epi = ncm.str.startswith(('6403', '6405', '6506', '9004')) | desc.str.contains('LUVA|CAPACETE|BOTA|OCULOS|MASCARA', regex=True)
+    cond_hidraulica = desc.str.contains('TUBO|VALVULA|CONEXAO', regex=True)
+    cond_eletrica = desc.str.contains('CABO|DISJUNTOR|FIO', regex=True)
+    cond_civil = desc.str.contains('CIMENTO|AREIA|TIJOLO', regex=True)
+    cond_ferramentas = desc.str.contains('CHAVE|BROCA|ALICATE', regex=True)
     
-    # REGRA 2: IÇAMENTO
-    if any(x in desc for x in ['CABO DE ACO','MANILHA','CINTA DE ELEVACAO']): 
-        return '🟡 IÇAMENTO (CRÍTICO)'
+    conditions = [cond_quimico, cond_icamento, cond_epi, cond_hidraulica, cond_eletrica, cond_civil, cond_ferramentas]
+    choices = ['🔴 QUÍMICO (CRÍTICO)', '🟡 IÇAMENTO (CRÍTICO)', '🟠 EPI (CRÍTICO)', '💧 HIDRÁULICA', '⚡ ELÉTRICA', '🧱 CIVIL', '🔧 FERRAMENTAS']
     
-    # REGRA 3: EPI (Atualizada com OCULOS e NCM 9004)
-    termos_epi = ['LUVA', 'CAPACETE', 'BOTA', 'OCULOS', 'PROTETOR', 'MASCARA', 'RESPIRADOR', 'CINTO', 'TALABARTE']
-    # NCMs: 6403/6405 (Calçados), 6506 (Capacetes), 9004 (Óculos)
-    if ncm.startswith(('6403', '6405', '6506', '9004')) or any(x in desc for x in termos_epi): 
-        return '🟠 EPI (CRÍTICO)'
-        
-    # REGRA 4: CATEGORIAS GERAIS
-    if any(x in desc for x in ['TUBO','VALVULA','CONEXAO']): return '💧 HIDRÁULICA'
-    if any(x in desc for x in ['CABO','DISJUNTOR','FIO']): return '⚡ ELÉTRICA'
-    if any(x in desc for x in ['CIMENTO','AREIA','TIJOLO']): return '🧱 CIVIL'
-    if any(x in desc for x in ['CHAVE','BROCA','ALICATE']): return '🔧 FERRAMENTAS'
-    
-    return '📦 GERAL'
+    return np.select(conditions, choices, default='📦 GERAL')
