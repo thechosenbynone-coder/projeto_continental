@@ -132,4 +132,5 @@ with tab1: render_tab_exec_review(df, df_final)
 with tab2: render_tab_dashboard(df, df_final)
 with tab3: render_tab_fornecedores(df, df_final)
 with tab4: render_tab_negociacao(df)
-with tab5: render_tab_busca(df_final)
+with tab5: render_tab_busca(df_full)
+
