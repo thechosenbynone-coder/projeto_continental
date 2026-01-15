@@ -26,7 +26,7 @@ st.set_page_config(page_title="Portal de Inteligência em Suprimentos", page_ico
 aplicar_tema()
 
 # ==============================================================================
-# FUNÇÕES DE SUPORTE
+# 1. FUNÇÕES DE SUPORTE (LIMPEZA E MATCH)
 # ==============================================================================
 
 def remover_acentos(texto):
@@ -66,7 +66,7 @@ def carregar_arquivo_flexivel(uploaded_file):
     except: return None
 
 # ==============================================================================
-# CARGA DE DADOS
+# 2. CARGA DE DADOS
 # ==============================================================================
 @st.cache_data
 def carregar_dados():
@@ -78,7 +78,7 @@ def carregar_dados():
 
     df['data_emissao'] = pd.to_datetime(df['data_emissao'])
     df['ano'] = df['data_emissao'].dt.year
-    df['mes_ano'] = df['data_emissao'].dt.strftime('%Y-%m') # ESSENCIAL
+    df['mes_ano'] = df['data_emissao'].dt.strftime('%Y-%m') 
     
     df['desc_prod'] = df['desc_prod'].astype(str).str.upper().str.strip()
     df['n_nf_clean'] = df['n_nf'].astype(str).apply(limpar_nf_excel)
@@ -95,7 +95,7 @@ def carregar_dados():
     return df
 
 # ==============================================================================
-# ENRIQUECIMENTO (DETETIVE)
+# 3. ENRIQUECIMENTO (DETETIVE)
 # ==============================================================================
 def enriquecer_dados_detetive(df_xml, df_mapa):
     try:
@@ -236,31 +236,56 @@ if 'AF_MAPA' in df_full.columns:
 
 st.divider()
 
-# PREPARAÇÃO DADOS PARA ABAS
-cols_agrup = ['desc_prod', 'ncm', 'Categoria']
-if 'cod_prod' in df_full.columns: cols_agrup.append('cod_prod') # USA CÓDIGO SE EXISTIR
-if 'AF_MAPA' in df_full.columns: cols_agrup.extend(['AF_MAPA', 'CC_MAPA', 'PLANO_MAPA'])
-cols_reais = [c for c in cols_agrup if c in df_full.columns]
+# ==============================================================================
+# PREPARAÇÃO DE DADOS (AGRUPAMENTO + SAVING)
+# ==============================================================================
 
-# FILTRO ANO
+# 1. Filtro de Ano
 anos = sorted(df_full['ano'].unique(), reverse=True)
 ano_sel = st.pills("Ano", options=anos, default=anos[0], selection_mode="single")
 if not ano_sel: ano_sel = anos[0]
 df_t = df_full[df_full['ano'] == ano_sel].copy()
 
-# ABAS
-tabs = st.tabs(["📌 Visão Executiva", "📊 Dashboard", "🛡️ Compliance", "📇 Fornecedores", "💰 Cockpit", "🔍 Busca"])
+# 2. Definição Dinâmica das Colunas de Agrupamento
+cols_agrup = ['desc_prod', 'ncm', 'Categoria']
+if 'cod_prod' in df_full.columns: cols_agrup.append('cod_prod')
+if 'AF_MAPA' in df_full.columns: cols_agrup.extend(['AF_MAPA', 'CC_MAPA', 'PLANO_MAPA'])
+cols_reais = [c for c in cols_agrup if c in df_t.columns]
 
-# Agrupamento para as abas (Simplificado)
+# 3. Agrupamento e Cálculo de Métricas Básicas
 df_grouped = df_t.groupby(cols_reais).agg(
-    v_total_item=('v_total_item', 'sum'),
-    qtd_real=('qtd_real', 'sum'),
-    v_unit_real=('v_unit_real', 'min')
+    Total_Gasto=('v_total_item', 'sum'),
+    Qtd_Total=('qtd_real', 'sum'),
+    Menor_Preco=('v_unit_real', 'min')
 ).reset_index()
 
-with tabs[0]: render_tab_exec_review(df_t, df_grouped)
-with tabs[1]: render_tab_dashboard(df_t, df_grouped)
-with tabs[2]: render_tab_compliance(df_full)
-with tabs[3]: render_tab_fornecedores(df_full, df_grouped)
-with tabs[4]: render_tab_negociacao(df_full)
-with tabs[5]: render_tab_busca(df_full)
+# 4. CÁLCULO CRÍTICO DE SAVING (GARANTINDO QUE EXISTE)
+if not df_grouped.empty:
+    df_grouped['Saving_Potencial'] = df_grouped['Total_Gasto'] - (df_grouped['Menor_Preco'] * df_grouped['Qtd_Total'])
+else:
+    # Se estiver vazio, cria a coluna com 0.0 para não dar KeyError nas abas
+    df_grouped['Saving_Potencial'] = 0.0
+
+# ==============================================================================
+# RENDERIZAÇÃO DAS ABAS
+# ==============================================================================
+tabs = st.tabs(["📌 Visão Executiva", "📊 Dashboard", "🛡️ Compliance", "📇 Fornecedores", "💰 Cockpit", "🔍 Busca"])
+
+with tabs[0]: 
+    # Passa o dataframe filtrado (df_t) e o agrupado com saving (df_grouped)
+    render_tab_exec_review(df_t, df_grouped)
+
+with tabs[1]: 
+    render_tab_dashboard(df_t, df_grouped)
+
+with tabs[2]: 
+    render_tab_compliance(df_full)
+
+with tabs[3]: 
+    render_tab_fornecedores(df_full, df_grouped)
+
+with tabs[4]: 
+    render_tab_negociacao(df_full)
+
+with tabs[5]: 
+    render_tab_busca(df_full)
