@@ -1,50 +1,180 @@
 import streamlit as st
 import plotly.express as px
-from utils.formatters import format_brl, format_perc
+import pandas as pd
 
-def render_tab_exec_review(df, df_final):
-    st.subheader("📌 Visão Executiva")
-    
-    total_spend = df['v_total_item'].sum()
-    imposto_total = df['Imposto_Total'].sum()
-    perc_imposto = imposto_total / total_spend if total_spend > 0 else 0
-    saving_total = df_final['Saving_Potencial'].sum()
-    critico_spend = df_final[df_final['Categoria'].str.contains('CRÍTICO')]['Total_Gasto'].sum()
 
-    c1,c2,c3,c4,c5 = st.columns(5)
-    c1.metric("💰 Gasto Total", format_brl(total_spend))
-    c2.metric("💸 Imposto Total", format_brl(imposto_total))
-    c3.metric("📊 Carga Tributária", format_perc(perc_imposto))
-    c4.metric("🎯 Saving Potencial", format_brl(saving_total))
-    c5.metric("⚠️ Gasto Crítico", format_brl(critico_spend))
+def _brl(v):
+    try:
+        return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
+        return "R$ 0,00"
 
-    # Gráfico de Tendência
-    df_trend = df.groupby('mes_ano').agg(Gasto=('v_total_item','sum'), Imposto=('Imposto_Total','sum')).reset_index()
-    if not df_trend.empty:
-        fig = px.line(df_trend, x='mes_ano', y=['Gasto','Imposto'], markers=True)
-        fig.update_layout(height=300, separators=",.", yaxis_tickformat=".2f") 
-        st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("🧾 Análise Tributária Detalhada"):
-        col1, col2 = st.columns(2)
-        with col1:
-            # Correção para garantir que Categoria exista no merge
-            df_cat_tax = df.merge(df_final[['desc_prod','Categoria']].drop_duplicates(), on='desc_prod', how='left', suffixes=('', '_y'))
-            if 'Categoria_y' in df_cat_tax.columns:
-                df_cat_tax['Categoria'] = df_cat_tax['Categoria_y'].fillna(df_cat_tax['Categoria'])
-            
-            df_cat_tax = df_cat_tax.groupby('Categoria').agg(Gasto=('v_total_item','sum'), Imposto=('Imposto_Total','sum')).reset_index()
-            df_cat_tax['% Imposto'] = df_cat_tax['Imposto'] / df_cat_tax['Gasto']
-            
-            fig_cat = px.bar(df_cat_tax.sort_values('% Imposto'), x='% Imposto', y='Categoria', orientation='h', text_auto='.1%')
-            fig_cat.update_layout(separators=",.")
-            st.plotly_chart(fig_cat, use_container_width=True)
+def render_tab_exec_review(df_ano: pd.DataFrame, df_grouped: pd.DataFrame):
+    st.markdown("## 📌 Sumário Executivo")
+    st.caption("Visão consolidada para decisão: estado atual, oportunidades, riscos e direcionamento.")
 
-        with col2:
-            df_forn_tax = df.groupby('nome_emit').agg(Gasto=('v_total_item','sum'), Imposto=('Imposto_Total','sum')).reset_index()
-            df_forn_tax['% Imposto'] = df_forn_tax['Imposto'] / df_forn_tax['Gasto']
-            view_tax = df_forn_tax.sort_values('% Imposto', ascending=False).head(10).copy()
-            view_tax['Gasto'] = view_tax['Gasto'].apply(format_brl)
-            view_tax['Imposto'] = view_tax['Imposto'].apply(format_brl)
-            view_tax['% Imposto'] = view_tax['% Imposto'].apply(format_perc)
-            st.dataframe(view_tax, use_container_width=True, hide_index=True)
+    # ==============================
+    # KPIs – FAIXA 1 (HIERARQUIA)
+    # ==============================
+    gasto_total = df_ano["v_total_item"].sum()
+    imposto_total = df_ano["Imposto_Total"].sum()
+    carga_tributaria = (imposto_total / gasto_total) if gasto_total > 0 else 0
+
+    saving_equalizado = (
+        df_grouped["Saving_Equalizado"].sum()
+        if "Saving_Equalizado" in df_grouped.columns
+        else 0
+    )
+
+    gasto_critico = 0
+    if "Categoria" in df_ano.columns:
+        gasto_critico = df_ano[df_ano["Categoria"].str.contains("CRÍTICO", na=False)]["v_total_item"].sum()
+
+    c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 1])
+
+    c1.metric("💰 Gasto Total", _brl(gasto_total))
+    c2.metric("🎯 Oportunidade de Saving", _brl(saving_equalizado))
+    c3.metric("⚠️ Gasto com Itens Críticos", _brl(gasto_critico))
+
+    with c4:
+        st.metric("🏛️ Imposto Total", _brl(imposto_total))
+        st.caption(f"Carga tributária: **{carga_tributaria*100:.1f}%**")
+
+    st.divider()
+
+    # ==============================
+    # TENDÊNCIA – FAIXA 2
+    # ==============================
+    st.subheader("📈 Tendência mensal: Gasto x Imposto")
+
+    df_trend = (
+        df_ano.groupby("mes_ano", dropna=False)
+        .agg(
+            Gasto=("v_total_item", "sum"),
+            Imposto=("Imposto_Total", "sum")
+        )
+        .reset_index()
+        .sort_values("mes_ano")
+    )
+
+    fig_trend = px.line(
+        df_trend,
+        x="mes_ano",
+        y=["Gasto", "Imposto"],
+        markers=True
+    )
+    fig_trend.update_layout(
+        template="plotly_white",
+        height=360,
+        xaxis_title="",
+        yaxis_title="R$",
+        legend_title_text=""
+    )
+
+    st.plotly_chart(fig_trend, use_container_width=True)
+
+    if len(df_trend) >= 2:
+        last = df_trend.iloc[-1]["Gasto"]
+        prev = df_trend.iloc[-2]["Gasto"]
+        if prev > 0:
+            mom = (last / prev - 1) * 100
+            st.caption(f"Variação do último mês vs anterior: **{mom:.1f}%**")
+
+    st.divider()
+
+    # ==============================
+    # EXPLICAÇÃO DO GASTO – FAIXA 3
+    # ==============================
+    left, right = st.columns(2)
+
+    with left:
+        st.subheader("Composição do gasto por categoria")
+        if "Categoria" in df_ano.columns:
+            df_cat = (
+                df_ano.groupby("Categoria")["v_total_item"]
+                .sum()
+                .reset_index()
+                .sort_values("v_total_item", ascending=False)
+            )
+
+            fig_tree = px.treemap(
+                df_cat,
+                path=["Categoria"],
+                values="v_total_item"
+            )
+            fig_tree.update_layout(
+                template="plotly_white",
+                height=360,
+                margin=dict(t=10, l=10, r=10, b=10)
+            )
+            st.plotly_chart(fig_tree, use_container_width=True)
+
+    with right:
+        st.subheader("Concentração por fornecedor (Top 10)")
+        if "nome_emit" in df_ano.columns:
+            df_forn = (
+                df_ano.groupby("nome_emit")["v_total_item"]
+                .sum()
+                .sort_values(ascending=False)
+                .head(10)
+                .reset_index()
+            )
+            df_forn = df_forn.sort_values("v_total_item")
+
+            fig_rank = px.bar(
+                df_forn,
+                x="v_total_item",
+                y="nome_emit",
+                orientation="h"
+            )
+            fig_rank.update_layout(
+                template="plotly_white",
+                height=360,
+                xaxis_title="R$",
+                yaxis_title="",
+                showlegend=False
+            )
+            st.plotly_chart(fig_rank, use_container_width=True)
+
+    st.divider()
+
+    # ==============================
+    # AÇÃO GUIADA – FAIXA 4 (TEASER)
+    # ==============================
+    st.subheader("🎯 Onde agir agora (Top 5 oportunidades)")
+    st.caption("Oportunidades baseadas na equalização do último preço vs média histórica. Detalhe no Cockpit.")
+
+    if "Saving_Equalizado" not in df_grouped.columns:
+        st.info("Saving equalizado não disponível.")
+        return
+
+    ops = df_grouped.copy()
+    ops["Saving_Equalizado"] = pd.to_numeric(ops["Saving_Equalizado"], errors="coerce").fillna(0)
+    ops = ops[ops["Saving_Equalizado"] > 10].sort_values("Saving_Equalizado", ascending=False).head(5)
+
+    if ops.empty:
+        st.info("Nenhuma oportunidade relevante encontrada neste recorte.")
+        return
+
+    cols_show = [
+        c for c in [
+            "desc_prod",
+            "Preco_Medio_Historico",
+            "Ultimo_Preco",
+            "Saving_Equalizado",
+            "Qtd_Compras"
+        ] if c in ops.columns
+    ]
+
+    st.dataframe(
+        ops[cols_show],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Preco_Medio_Historico": st.column_config.NumberColumn("Preço Médio Hist.", format="R$ %.2f"),
+            "Ultimo_Preco": st.column_config.NumberColumn("Último Preço", format="R$ %.2f"),
+            "Saving_Equalizado": st.column_config.NumberColumn("Oportunidade Saving", format="R$ %.2f"),
+            "Qtd_Compras": st.column_config.NumberColumn("Qtd Compras", format="%.0f"),
+        }
+    )
