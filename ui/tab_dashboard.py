@@ -10,13 +10,17 @@ def _safe_col(df: pd.DataFrame, *candidates: str):
     return None
 
 
+def _brl(v: float) -> str:
+    try:
+        return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,00"
+
+
 def render_tab_dashboard(df: pd.DataFrame, df_final: pd.DataFrame):
     st.markdown("### 📊 Dashboard de Suprimentos")
-    st.caption("Radar rápido: onde está o gasto, onde concentra e um teaser de oportunidades (detalhe no Cockpit).")
+    st.caption("Radar: gasto, concentração, tendência e um teaser das oportunidades (detalhe no Cockpit).")
 
-    # -------------------------
-    # Descobrir colunas principais
-    # -------------------------
     spend_col = _safe_col(df, "v_total_item", "Total_Gasto", "Gasto")
     nf_col = _safe_col(df, "n_nf_clean", "n_nf")
     forn_col = _safe_col(df, "nome_emit", "Fornecedor", "Nome_Fornecedor")
@@ -35,10 +39,12 @@ def render_tab_dashboard(df: pd.DataFrame, df_final: pd.DataFrame):
     forn_ativos = int(df[forn_col].nunique()) if forn_col and len(df) else 0
     itens_distintos = int(df["desc_prod"].nunique()) if "desc_prod" in df.columns and len(df) else 0
 
-    saving_pot_total = 0.0
-    if isinstance(df_final, pd.DataFrame) and "Saving_Potencial" in df_final.columns:
-        saving_pot_total = float(df_final["Saving_Potencial"].fillna(0).sum())
+    # Preferir Saving_Equalizado como “oportunidade agora”
+    saving_equal_total = 0.0
+    if isinstance(df_final, pd.DataFrame) and "Saving_Equalizado" in df_final.columns:
+        saving_equal_total = float(pd.to_numeric(df_final["Saving_Equalizado"], errors="coerce").fillna(0).sum())
 
+    # Concentração
     top10_share = 0.0
     tail_share = 0.0
     if forn_col and len(df):
@@ -50,15 +56,14 @@ def render_tab_dashboard(df: pd.DataFrame, df_final: pd.DataFrame):
             tail_share = float(1 - top20_share)
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("💰 Gasto", f"R$ {total_spend:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    c1.metric("💰 Gasto", _brl(total_spend))
     c2.metric("🧾 NFs", f"{nf_unicas:,}".replace(",", "."))
     c3.metric("🏢 Fornecedores", f"{forn_ativos:,}".replace(",", "."))
     c4.metric("📦 Itens", f"{itens_distintos:,}".replace(",", "."))
-    c5.metric("🎯 Saving Pot.", f"R$ {saving_pot_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    c5.metric("🎯 Oport. (Equal.)", _brl(saving_equal_total))
     c6.metric("🧲 Top 10 Share", f"{top10_share*100:.1f}%")
 
     st.caption(f"Tail spend (fora Top 20 fornecedores): **{tail_share*100:.1f}%**" if forn_col else "")
-
     st.divider()
 
     # -------------------------
@@ -77,11 +82,7 @@ def render_tab_dashboard(df: pd.DataFrame, df_final: pd.DataFrame):
             )
             df_cat[cat_col] = df_cat[cat_col].fillna("SEM CATEGORIA").astype(str)
 
-            fig_tree = px.treemap(
-                df_cat,
-                path=[cat_col],
-                values=spend_col,
-            )
+            fig_tree = px.treemap(df_cat, path=[cat_col], values=spend_col)
             fig_tree.update_layout(
                 template="plotly_white",
                 height=380,
@@ -120,12 +121,7 @@ def render_tab_dashboard(df: pd.DataFrame, df_final: pd.DataFrame):
     # -------------------------
     st.subheader("📅 Tendência mensal do gasto")
     if mes_col:
-        df_monthly = (
-            df.groupby(mes_col)[spend_col]
-            .sum()
-            .reset_index()
-            .sort_values(mes_col)
-        )
+        df_monthly = df.groupby(mes_col)[spend_col].sum().reset_index().sort_values(mes_col)
         df_monthly.columns = ["Mes", "Gasto"]
 
         insight = ""
@@ -153,48 +149,57 @@ def render_tab_dashboard(df: pd.DataFrame, df_final: pd.DataFrame):
     st.divider()
 
     # -------------------------
-    # Teaser (Faixa 4) - Top 5 oportunidades (detalhe no Cockpit)
+    # Teaser (Faixa 4) - Top 5 oportunidades (Equalizado)
     # -------------------------
-    st.subheader("🎯 Top 5 oportunidades (teaser)")
-    st.caption("Detalhamento completo e filtros avançados na aba **Cockpit**.")
+    st.subheader("🎯 Top 5 oportunidades (equalização vs última compra)")
+    st.caption("Detalhamento completo, filtros e drilldown na aba **Cockpit**.")
 
-    if not isinstance(df_final, pd.DataFrame) or "Saving_Potencial" not in df_final.columns:
-        st.info("Saving_Potencial não encontrado no df_final. (Verifique processamento/colunas)")
+    if not isinstance(df_final, pd.DataFrame) or "Saving_Equalizado" not in df_final.columns:
+        st.info("Saving_Equalizado não encontrado no df_final. Verifique o cálculo no app_compras.py.")
+        return
+
+    # Ordenação e filtros para evitar “top 5 de zeros”
+    ops = df_final.copy()
+    ops["Saving_Equalizado"] = pd.to_numeric(ops["Saving_Equalizado"], errors="coerce").fillna(0)
+
+    # Filtros recomendados: saving relevante e evidência mínima (quando existir)
+    ops = ops[ops["Saving_Equalizado"] > 10]
+
+    if "Qtd_Compras" in ops.columns:
+        ops["Qtd_Compras"] = pd.to_numeric(ops["Qtd_Compras"], errors="coerce").fillna(0)
+        ops = ops[ops["Qtd_Compras"] >= 2]
+
+    ops = ops.sort_values("Saving_Equalizado", ascending=False).head(5)
+
+    if ops.empty:
+        st.info("Sem oportunidades relevantes neste recorte (ou pouca recorrência). Veja o Cockpit para aprofundar.")
         return
 
     preferred_order = [
         "desc_prod",
         "Categoria",
+        "Qtd_Compras",
         "Qtd_Total",
         "Menor_Preco",
+        "Preco_Medio_Historico",
         "Ultimo_Preco",
-        "Preco_Medio",
-        "Total_Gasto",
-        "Saving_Potencial",
+        "Saving_Equalizado",
         "Ultimo_Forn",
         "Ultima_Data",
     ]
-    cols_show = [c for c in preferred_order if c in df_final.columns]
+    cols_show = [c for c in preferred_order if c in ops.columns]
 
-    view_ops = df_final.copy()
-    view_ops["Saving_Potencial"] = view_ops["Saving_Potencial"].fillna(0)
-
-    # pega top 5, mas evita poluir com zeros se houver poucas oportunidades reais
-    view_ops = view_ops.sort_values("Saving_Potencial", ascending=False)
-    view_ops = view_ops.head(5)
-
-    # Config monetária correta (mantém número como número)
     money_cfg = {
-        "Total_Gasto": st.column_config.NumberColumn("Total_Gasto", format="R$ %.2f"),
         "Menor_Preco": st.column_config.NumberColumn("Menor_Preco", format="R$ %.2f"),
+        "Preco_Medio_Historico": st.column_config.NumberColumn("Preco_Medio_Historico", format="R$ %.2f"),
         "Ultimo_Preco": st.column_config.NumberColumn("Ultimo_Preco", format="R$ %.2f"),
-        "Preco_Medio": st.column_config.NumberColumn("Preco_Medio", format="R$ %.2f"),
-        "Saving_Potencial": st.column_config.NumberColumn("Saving_Potencial", format="R$ %.2f"),
+        "Saving_Equalizado": st.column_config.NumberColumn("Saving_Equalizado", format="R$ %.2f"),
         "Qtd_Total": st.column_config.NumberColumn("Qtd_Total", format="%.0f"),
+        "Qtd_Compras": st.column_config.NumberColumn("Qtd_Compras", format="%.0f"),
     }
 
     st.dataframe(
-        view_ops[cols_show],
+        ops[cols_show],
         use_container_width=True,
         hide_index=True,
         column_config=money_cfg,
