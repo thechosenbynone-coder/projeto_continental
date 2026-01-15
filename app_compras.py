@@ -4,8 +4,8 @@ import sqlite3
 import os
 import re
 import io
+import unicodedata # <--- BIBLIOTECA PADRÃO DO PYTHON (NÃO PRECISA INSTALAR)
 from difflib import SequenceMatcher
-from unidecode import unidecode # Recomendado para remover acentos na comparação
 
 # --- IMPORTS ---
 from styles.theme import aplicar_tema
@@ -29,6 +29,13 @@ aplicar_tema()
 # 1. FUNÇÕES DE SUPORTE (INTELIGÊNCIA DE MATCH)
 # ==============================================================================
 
+def remover_acentos(texto):
+    """Remove acentos usando biblioteca padrão (unicodedata)."""
+    if not isinstance(texto, str): return str(texto)
+    # Normaliza para separar o caractere do acento e remove o acento
+    nfkd = unicodedata.normalize('NFKD', texto)
+    return "".join([c for c in nfkd if not unicodedata.combining(c)])
+
 def limpar_texto_match(texto):
     """
     Padroniza texto para comparação:
@@ -38,15 +45,15 @@ def limpar_texto_match(texto):
     """
     if not isinstance(texto, str): return str(texto)
     
-    # Remove acentos
-    texto = unidecode(texto).upper().strip()
+    # 1. Remove acentos
+    texto = remover_acentos(texto).upper().strip()
     
-    # Remove sufixos comuns que atrapalham o match
+    # 2. Remove sufixos comuns que atrapalham o match
     sufixos = [' LTDA', ' S.A', ' SA', ' EIRELI', ' ME', ' EPP', ' COMERCIO', ' SERVICOS', ' INDUSTRIA', ' BRASIL']
     for s in sufixos:
         texto = texto.replace(s, '')
         
-    # Mantém apenas letras e números
+    # 3. Mantém apenas letras e números
     return re.sub(r'[^A-Z0-9]', '', texto)
 
 def calcular_similaridade(nome_xml, nome_excel):
@@ -133,7 +140,7 @@ def enriquecer_dados_detetive(df_xml, df_mapa):
             'NF': ['NF', 'NOTA', 'N_NF', 'NUMERO'],
             'FORNECEDOR': ['FORNECEDOR', 'NOME', 'EMPRESA'],
             'AF': ['AF/AS', 'AF', 'AS', 'PEDIDO', 'OC'],
-            'CC': ['CC', 'CENTRO', 'CUSTO', 'PLANO DE CONTAS'], # Adicionei Plano de Contas como fallback
+            'CC': ['CC', 'CENTRO', 'CUSTO', 'PLANO DE CONTAS'],
             'VALOR': ['VALOR', 'TOTAL', 'V.TOTAL', 'R$']
         }
 
@@ -155,7 +162,6 @@ def enriquecer_dados_detetive(df_xml, df_mapa):
         df_mapa['nf_key'] = df_mapa[mapa_cols['NF']].astype(str).apply(lambda x: re.sub(r'\D', '', x).lstrip('0'))
         
         # Cria dicionário indexado por NF (Otimização de Performance)
-        # { '123': [ linha1, linha2 ] }
         dict_mapa = {}
         for idx, row in df_mapa.iterrows():
             nf = row['nf_key']
@@ -170,13 +176,10 @@ def enriquecer_dados_detetive(df_xml, df_mapa):
 
         total_matches = 0
 
-        # Itera sobre cada NOTA FISCAL do XML (agrupado para não repetir processamento por item)
-        # Mas precisamos preencher item a item, então iteramos o DF
-        
+        # Itera sobre cada NOTA FISCAL do XML 
         for idx, row_xml in df_xml.iterrows():
             nf_xml = row_xml['n_nf_clean']
             forn_xml = row_xml['nome_emit']
-            valor_xml = row_xml['v_total_item'] # Valor do item (cuidado, o mapa costuma ter valor total da nota)
             
             # Busca candidatos com a mesma NF
             candidatos = dict_mapa.get(nf_xml, [])
@@ -196,18 +199,11 @@ def enriquecer_dados_detetive(df_xml, df_mapa):
                     else:
                         score_atual = 50 # Neutro
                     
-                    # B. Validação de Valor (Desempate)
-                    # Se o valor do item for igual ao valor da linha do mapa (raro, mas possível em serviços)
-                    # Ou se não tivermos valor no mapa, ignoramos
-                    
                     if score_atual > melhor_score:
                         melhor_score = score_atual
                         melhor_candidato = cand
             
             # --- DECISÃO FINAL ---
-            # Aceitamos match se score > 45 (Nomes parecidos ou inclusos)
-            # Ou se score > 0 e só tem 1 candidato na NF (Confiança na unicidade da NF)
-            
             aceitar = False
             status = "Não Encontrado"
             
@@ -264,19 +260,18 @@ with st.sidebar:
     st.header("🕵️ Inteligência de Negócio")
     st.info("Carregue seus arquivos 'MAPA 2024.csv' e 'MAPA 2025.csv'.")
     
-    # Upload Múltiplo (Para subir 2024 e 2025 de uma vez se quiser)
+    # Upload Múltiplo 
     uploaded_files = st.file_uploader("Carregar Mapas (CSV ou Excel)", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
     
     cols_financeiras = []
     
     if uploaded_files:
-        # Concatena todos os arquivos carregados em um único DataFrame Mestre
+        # Concatena todos os arquivos carregados
         df_mapa_mestre = pd.DataFrame()
         
         for file in uploaded_files:
             df_temp = carregar_arquivo_flexivel(file)
             if df_temp is not None:
-                # Padroniza colunas antes de juntar
                 df_temp.columns = [str(c).upper().strip() for c in df_temp.columns]
                 df_mapa_mestre = pd.concat([df_mapa_mestre, df_temp], ignore_index=True)
         
@@ -322,7 +317,6 @@ group_cols = ['desc_prod', 'ncm', 'Categoria']
 if 'AF_MAPA' in df_full.columns:
     group_cols.extend(['AF_MAPA', 'CC_MAPA'])
 
-# Agrupamento Seguro (Prevenindo erros se colunas não existirem)
 cols_existentes = [c for c in group_cols if c in df_full.columns]
 
 df_grouped_full = df_full.groupby(cols_existentes).agg(
@@ -342,7 +336,6 @@ def processar_filtro_ano(df_base, key_suffix):
     if not ano_sel: ano_sel = anos[0]
     df_filtered = df_base[df_base['ano'] == ano_sel].copy()
 
-    # Recalcula com colunas extras se existirem
     cols_agrup = ['desc_prod', 'ncm', 'Categoria']
     if 'AF_MAPA' in df_filtered.columns: cols_agrup.extend(['AF_MAPA', 'CC_MAPA'])
     cols_validas = [c for c in cols_agrup if c in df_filtered.columns]
