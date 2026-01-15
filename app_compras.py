@@ -26,44 +26,29 @@ st.set_page_config(page_title="Portal de Inteligência em Suprimentos", page_ico
 aplicar_tema()
 
 # ==============================================================================
-# 1. FUNÇÕES DE SUPORTE (LIMPEZA E MATCH)
+# FUNÇÕES DE SUPORTE
 # ==============================================================================
 
 def remover_acentos(texto):
-    """Remove acentos de forma nativa."""
     if not isinstance(texto, str): return str(texto)
     nfkd = unicodedata.normalize('NFKD', texto)
     return "".join([c for c in nfkd if not unicodedata.combining(c)])
 
 def limpar_texto_match(texto):
-    """Padroniza texto para comparação (Upper, sem acento, sem sufixo)."""
     if not isinstance(texto, str): return str(texto)
     texto = remover_acentos(texto).upper().strip()
-    sufixos = [' LTDA', ' S.A', ' SA', ' EIRELI', ' ME', ' EPP', ' COMERCIO', ' SERVICOS', ' INDUSTRIA', ' BRASIL']
-    for s in sufixos:
-        texto = texto.replace(s, '')
+    sufixos = [' LTDA', ' S.A', ' SA', ' EIRELI', ' ME', ' EPP', ' COMERCIO', ' SERVICOS']
+    for s in sufixos: texto = texto.replace(s, '')
     return re.sub(r'[^A-Z0-9]', '', texto)
 
 def limpar_nf_excel(valor):
-    """
-    CORREÇÃO CRÍTICA: Trata o erro de float do Excel (ex: 123.0 virar 1230).
-    """
-    if pd.isna(valor) or valor == '':
-        return ""
-    
-    # Converte para string
+    """Remove .0 e zeros à esquerda"""
+    if pd.isna(valor) or valor == '': return ""
     s = str(valor).strip()
-    
-    # Se terminar em .0, remove (ex: '102648.0' -> '102648')
-    if s.endswith('.0'):
-        s = s[:-2]
-        
-    # Remove tudo que não é dígito e zeros à esquerda
-    s = re.sub(r'\D', '', s).lstrip('0')
-    return s
+    if s.endswith('.0'): s = s[:-2]
+    return re.sub(r'\D', '', s).lstrip('0')
 
 def calcular_similaridade(nome_xml, nome_excel):
-    """Score de 0 a 100."""
     t_xml = limpar_texto_match(nome_xml)
     t_excel = limpar_texto_match(nome_excel)
     if t_xml == t_excel: return 100
@@ -71,24 +56,17 @@ def calcular_similaridade(nome_xml, nome_excel):
     return SequenceMatcher(None, t_xml, t_excel).ratio() * 100
 
 def carregar_arquivo_flexivel(uploaded_file):
-    """Lê Excel ou CSV (UTF-8 ou Latin1)."""
     try:
         if uploaded_file.name.lower().endswith('.csv'):
-            try:
-                # Tenta padrão universal
-                return pd.read_csv(uploaded_file, encoding='utf-8-sig', sep=None, engine='python')
-            except:
-                # Tenta padrão Excel Brasileiro (ponto e vírgula, latin1)
+            try: return pd.read_csv(uploaded_file, encoding='utf-8-sig', sep=None, engine='python')
+            except: 
                 uploaded_file.seek(0)
                 return pd.read_csv(uploaded_file, sep=';', encoding='latin1')
-        else:
-            return pd.read_excel(uploaded_file)
-    except Exception as e:
-        st.error(f"Erro ao ler arquivo {uploaded_file.name}: {e}")
-        return None
+        return pd.read_excel(uploaded_file)
+    except: return None
 
 # ==============================================================================
-# 2. CARGA DE DADOS (XML)
+# CARGA DE DADOS
 # ==============================================================================
 @st.cache_data
 def carregar_dados():
@@ -100,12 +78,9 @@ def carregar_dados():
 
     df['data_emissao'] = pd.to_datetime(df['data_emissao'])
     df['ano'] = df['data_emissao'].dt.year
-    # CORREÇÃO: Coluna Mes_Ano reintegrada
-    df['mes_ano'] = df['data_emissao'].dt.strftime('%Y-%m')
+    df['mes_ano'] = df['data_emissao'].dt.strftime('%Y-%m') # ESSENCIAL
     
     df['desc_prod'] = df['desc_prod'].astype(str).str.upper().str.strip()
-    
-    # Limpeza da NF do XML
     df['n_nf_clean'] = df['n_nf'].astype(str).apply(limpar_nf_excel)
 
     if 'v_total_item' not in df.columns: df['v_total_item'] = 0.0
@@ -120,13 +95,12 @@ def carregar_dados():
     return df
 
 # ==============================================================================
-# 3. ENRIQUECIMENTO DETETIVE (CORRIGIDO)
+# ENRIQUECIMENTO (DETETIVE)
 # ==============================================================================
 def enriquecer_dados_detetive(df_xml, df_mapa):
     try:
         df_mapa.columns = [str(c).upper().strip() for c in df_mapa.columns]
-
-        # Mapeamento com PLANO DE CONTAS separado
+        
         mapa_cols = {'NF': None, 'FORNECEDOR': None, 'AF': None, 'CC': None, 'PLANO': None}
         sinonimos = {
             'NF': ['NF', 'NOTA', 'N_NF', 'NUMERO'],
@@ -136,23 +110,17 @@ def enriquecer_dados_detetive(df_xml, df_mapa):
             'CC': ['CC', 'CENTRO', 'CUSTO', 'DEPARTAMENTO']
         }
 
-        # Identifica colunas
         for chave, lista_nomes in sinonimos.items():
             for col_real in df_mapa.columns:
-                # Lógica: Se achou "PLANO DE CONTAS", não deixa o "CC" pegar ele depois
                 if any(nome == col_real or nome in col_real for nome in lista_nomes):
-                    if chave == 'CC' and 'PLANO' in col_real: continue # Evita confusão
+                    if chave == 'CC' and 'PLANO' in col_real: continue
                     mapa_cols[chave] = col_real
                     break
         
-        if not mapa_cols['NF']:
-            st.error("❌ Coluna NF não encontrada nos arquivos.")
-            return df_xml, [], 0
+        if not mapa_cols['NF']: return df_xml, [], 0
 
-        # Cria chave limpa com a CORREÇÃO DO FLOAT
         df_mapa['nf_key'] = df_mapa[mapa_cols['NF']].apply(limpar_nf_excel)
         
-        # Dicionário Indexado
         dict_mapa = {}
         for idx, row in df_mapa.iterrows():
             nf = row['nf_key']
@@ -160,11 +128,7 @@ def enriquecer_dados_detetive(df_xml, df_mapa):
                 if nf not in dict_mapa: dict_mapa[nf] = []
                 dict_mapa[nf].append(row)
 
-        # Loop de Cruzamento
-        af_list = []
-        cc_list = []
-        plano_list = []
-        status_list = []
+        af_list, cc_list, plano_list, status_list = [], [], [], []
         total_matches = 0
 
         for idx, row_xml in df_xml.iterrows():
@@ -181,8 +145,7 @@ def enriquecer_dados_detetive(df_xml, df_mapa):
                     if mapa_cols['FORNECEDOR']:
                         nome_mapa = str(cand[mapa_cols['FORNECEDOR']])
                         score = calcular_similaridade(forn_xml, nome_mapa)
-                    else:
-                        score = 50 
+                    else: score = 50
                     
                     if score > melhor_score:
                         melhor_score = score
@@ -212,10 +175,9 @@ def enriquecer_dados_detetive(df_xml, df_mapa):
                 if mapa_cols['CC']: val_cc = str(melhor_candidato[mapa_cols['CC']])
                 if mapa_cols['PLANO']: val_plano = str(melhor_candidato[mapa_cols['PLANO']])
                 
-                # Limpa 'nan' do pandas
-                if val_af.lower() == 'nan': val_af = "Não Mapeado"
-                if val_cc.lower() == 'nan': val_cc = "Não Mapeado"
-                if val_plano.lower() == 'nan': val_plano = "Não Mapeado"
+                if str(val_af).lower() == 'nan': val_af = "Não Mapeado"
+                if str(val_cc).lower() == 'nan': val_cc = "Não Mapeado"
+                if str(val_plano).lower() == 'nan': val_plano = "Não Mapeado"
 
             af_list.append(val_af)
             cc_list.append(val_cc)
@@ -227,132 +189,78 @@ def enriquecer_dados_detetive(df_xml, df_mapa):
         df_xml['PLANO_MAPA'] = plano_list
         df_xml['STATUS_MATCH'] = status_list
         
-        cols_retorno = ['AF_MAPA', 'CC_MAPA', 'PLANO_MAPA', 'STATUS_MATCH']
-        return df_xml, cols_retorno, total_matches
+        return df_xml, ['AF_MAPA', 'CC_MAPA', 'PLANO_MAPA', 'STATUS_MATCH'], total_matches
 
     except Exception as e:
         st.error(f"Erro no Detetive: {e}")
         return df_xml, [], 0
 
 # ==============================================================================
-# INTERFACE PRINCIPAL
+# INTERFACE
 # ==============================================================================
-
 st.title("🏗️ Portal de Inteligência em Suprimentos")
 
 df_full = carregar_dados()
 if df_full.empty:
-    st.error("Base XML vazia. Rode o extrator primeiro.")
+    st.error("Base vazia. Rode o extrator.")
     st.stop()
 
 with st.sidebar:
     st.header("🕵️ Inteligência de Negócio")
-    st.info("Suba os arquivos 'MAPA 2024' e 'MAPA 2025' juntos.")
-    
     uploaded_files = st.file_uploader("Carregar Mapas (CSV/Excel)", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
     
     if uploaded_files:
-        df_mapa_mestre = pd.DataFrame()
+        df_mapa = pd.DataFrame()
         for file in uploaded_files:
-            df_temp = carregar_arquivo_flexivel(file)
-            if df_temp is not None:
-                # Normaliza colunas antes de concatenar
-                df_temp.columns = [str(c).upper().strip() for c in df_temp.columns]
-                df_mapa_mestre = pd.concat([df_mapa_mestre, df_temp], ignore_index=True)
+            df_t = carregar_arquivo_flexivel(file)
+            if df_t is not None:
+                df_t.columns = [str(c).upper().strip() for c in df_t.columns]
+                df_mapa = pd.concat([df_mapa, df_t], ignore_index=True)
         
-        if not df_mapa_mestre.empty:
-            st.success(f"{len(df_mapa_mestre)} linhas carregadas.")
-            if st.button("🚀 Processar Cruzamento"):
-                with st.spinner("Analisando NFs, Nomes e Planos de Conta..."):
-                    df_full, cols_fin, matches = enriquecer_dados_detetive(df_full, df_mapa_mestre)
-                    if matches > 0:
-                        st.balloons()
-                        st.success(f"Sucesso! {matches} notas vinculadas.")
-                    else:
-                        st.warning("Nenhum match encontrado. Verifique se os CSVs estão corretos.")
+        if not df_mapa.empty:
+            st.success(f"{len(df_mapa)} linhas carregadas.")
+            if st.button("🚀 Processar"):
+                with st.spinner("Analisando..."):
+                    df_full, _, matches = enriquecer_dados_detetive(df_full, df_mapa)
+                    if matches > 0: st.success(f"{matches} vínculos encontrados!")
+                    else: st.warning("Nenhum match encontrado.")
 
-# --- DASHBOARD DE ENRIQUECIMENTO ---
 if 'AF_MAPA' in df_full.columns:
-    st.markdown("### 📊 Visão Estratégica Integrada")
-    df_match = df_full[df_full['AF_MAPA'] != 'Não Mapeado'].copy()
-    
-    if not df_match.empty:
+    st.markdown("### 📊 Visão Integrada")
+    df_m = df_full[df_full['AF_MAPA'] != 'Não Mapeado']
+    if not df_m.empty:
         c1, c2, c3 = st.columns(3)
-        with c1:
-            st.caption("Gasto por Centro de Custo")
-            graf_cc = df_match.groupby('CC_MAPA')['v_total_item'].sum().sort_values(ascending=True)
-            st.bar_chart(graf_cc, color="#2ecc71", horizontal=True)
-        with c2:
-            st.caption("Gasto por Plano de Contas")
-            graf_pl = df_match.groupby('PLANO_MAPA')['v_total_item'].sum().sort_values(ascending=True)
-            st.bar_chart(graf_pl, color="#3498db", horizontal=True)
-        with c3:
-            st.metric("Itens Mapeados", f"{len(df_match)}", f"{(len(df_match)/len(df_full))*100:.1f}% Cobertura")
+        c1.bar_chart(df_m.groupby('CC_MAPA')['v_total_item'].sum(), color="#2ecc71", horizontal=True)
+        c2.bar_chart(df_m.groupby('PLANO_MAPA')['v_total_item'].sum(), color="#3498db", horizontal=True)
+        c3.metric("Cobertura", f"{(len(df_m)/len(df_full))*100:.1f}%")
 
 st.divider()
 
-# --- PREPARAÇÃO DE DADOS PARA ABAS ---
-group_cols = ['desc_prod', 'ncm', 'Categoria']
-if 'AF_MAPA' in df_full.columns:
-    group_cols.extend(['AF_MAPA', 'CC_MAPA', 'PLANO_MAPA'])
+# PREPARAÇÃO DADOS PARA ABAS
+cols_agrup = ['desc_prod', 'ncm', 'Categoria']
+if 'cod_prod' in df_full.columns: cols_agrup.append('cod_prod') # USA CÓDIGO SE EXISTIR
+if 'AF_MAPA' in df_full.columns: cols_agrup.extend(['AF_MAPA', 'CC_MAPA', 'PLANO_MAPA'])
+cols_reais = [c for c in cols_agrup if c in df_full.columns]
 
-cols_validas = [c for c in group_cols if c in df_full.columns]
+# FILTRO ANO
+anos = sorted(df_full['ano'].unique(), reverse=True)
+ano_sel = st.pills("Ano", options=anos, default=anos[0], selection_mode="single")
+if not ano_sel: ano_sel = anos[0]
+df_t = df_full[df_full['ano'] == ano_sel].copy()
 
-# Agrupamento Global (Full)
-df_grouped_full = df_full.groupby(cols_validas).agg(
-    Total_Gasto=('v_total_item', 'sum'),
-    Qtd_Total=('qtd_real', 'sum'), 
-    Menor_Preco=('v_unit_real', 'min') 
-).reset_index()
-
-# FILTRO AUXILIAR
-def processar_filtro_ano(df_base, key_suffix):
-    anos = sorted(df_base['ano'].unique(), reverse=True)
-    c1, c2 = st.columns([1, 5])
-    with c1: st.markdown("**Período:**")
-    with c2:
-        ano_sel = st.pills("Ano", options=anos, default=anos[0], label_visibility="collapsed", key=f"pills_{key_suffix}")
-    
-    if not ano_sel: ano_sel = anos[0]
-    df_filtered = df_base[df_base['ano'] == ano_sel].copy()
-
-    # Agrupamento Filtrado
-    cols_agrup = ['desc_prod', 'ncm', 'Categoria']
-    if 'AF_MAPA' in df_filtered.columns: 
-        cols_agrup.extend(['AF_MAPA', 'CC_MAPA', 'PLANO_MAPA'])
-    cols_validas_filt = [c for c in cols_agrup if c in df_filtered.columns]
-
-    df_grouped = df_filtered.groupby(cols_validas_filt).agg(
-        Total_Gasto=('v_total_item', 'sum'),
-        Qtd_Total=('qtd_real', 'sum'),
-        Menor_Preco=('v_unit_real', 'min')
-    ).reset_index()
-    
-    df_grouped['cod_prod'] = '' 
-
-    df_last = (
-        df_filtered.sort_values('data_emissao')
-        .drop_duplicates(['desc_prod', 'ncm'], keep='last')
-        [['desc_prod', 'ncm', 'v_unit_real', 'nome_emit', 'data_emissao']]
-        .rename(columns={'v_unit_real': 'Ultimo_Preco', 'nome_emit': 'Ultimo_Forn', 'data_emissao': 'Ultima_Data'})
-    )
-    df_res = df_grouped.merge(df_last, on=['desc_prod', 'ncm'])
-    df_res['Saving_Potencial'] = df_res['Total_Gasto'] - (df_res['Menor_Preco'] * df_res['Qtd_Total'])
-    
-    return df_filtered, df_res
-
-# --- ABAS ---
+# ABAS
 tabs = st.tabs(["📌 Visão Executiva", "📊 Dashboard", "🛡️ Compliance", "📇 Fornecedores", "💰 Cockpit", "🔍 Busca"])
 
-with tabs[0]:
-    df_t1, df_final_t1 = processar_filtro_ano(df_full, "tab1")
-    render_tab_exec_review(df_t1, df_final_t1)
+# Agrupamento para as abas (Simplificado)
+df_grouped = df_t.groupby(cols_reais).agg(
+    v_total_item=('v_total_item', 'sum'),
+    qtd_real=('qtd_real', 'sum'),
+    v_unit_real=('v_unit_real', 'min')
+).reset_index()
 
-with tabs[1]:
-    df_t2, df_final_t2 = processar_filtro_ano(df_full, "tab2")
-    render_tab_dashboard(df_t2, df_final_t2)
-
+with tabs[0]: render_tab_exec_review(df_t, df_grouped)
+with tabs[1]: render_tab_dashboard(df_t, df_grouped)
 with tabs[2]: render_tab_compliance(df_full)
-with tabs[3]: render_tab_fornecedores(df_full, df_grouped_full)
+with tabs[3]: render_tab_fornecedores(df_full, df_grouped)
 with tabs[4]: render_tab_negociacao(df_full)
 with tabs[5]: render_tab_busca(df_full)
