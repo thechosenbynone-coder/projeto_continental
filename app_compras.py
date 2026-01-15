@@ -12,9 +12,8 @@ from utils.classifiers import classificar_materiais_turbo
 from utils.normalizer import normalizar_unidades_v1
 from utils.compliance import validar_compliance
 
-# Imports das Abas
+# Imports das Abas (Dashboard removido)
 from ui.tab_exec_review import render_tab_exec_review
-from ui.tab_dashboard import render_tab_dashboard
 from ui.tab_fornecedores import render_tab_fornecedores
 from ui.tab_negociacao import render_tab_negociacao
 from ui.tab_busca import render_tab_busca
@@ -103,7 +102,7 @@ def carregar_dados():
             df[col] = 0.0
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # Impostos (mantendo seu padrão)
+    # Impostos
     for col in ["v_icms", "v_ipi", "v_pis", "v_cofins"]:
         if col not in df.columns:
             df[col] = 0.0
@@ -269,7 +268,6 @@ if "AF_MAPA" in df_full.columns:
     df_m = df_full[df_full["AF_MAPA"] != "Não Mapeado"]
     if not df_m.empty:
         c1, c2, c3 = st.columns(3)
-        # mantendo seu padrão atual (bar_chart simples)
         c1.bar_chart(df_m.groupby("CC_MAPA")["v_total_item"].sum(), horizontal=True)
         c2.bar_chart(df_m.groupby("PLANO_MAPA")["v_total_item"].sum(), horizontal=True)
         c3.metric("Cobertura", f"{(len(df_m) / len(df_full)) * 100:.1f}%")
@@ -280,7 +278,7 @@ st.divider()
 # PREPARAÇÃO DE DADOS (BENCHMARK HISTÓRICO GLOBAL + IMPACTO ANUAL)
 # ==============================================================================
 
-# 1) Filtro de ano (impacto anual)
+# Ano selecionado (impacto anual)
 anos = sorted(df_full["ano"].dropna().unique(), reverse=True)
 ano_sel = st.pills("Ano", options=anos, default=anos[0], selection_mode="single")
 if not ano_sel:
@@ -288,7 +286,7 @@ if not ano_sel:
 
 df_ano = df_full[df_full["ano"] == ano_sel].copy()
 
-# 2) Definição dinâmica das colunas de agrupamento
+# Colunas de agrupamento (dinâmicas)
 cols_agrup = ["desc_prod", "ncm", "Categoria"]
 if "cod_prod" in df_full.columns:
     cols_agrup.append("cod_prod")
@@ -297,7 +295,7 @@ if "AF_MAPA" in df_full.columns:
 
 cols_reais = [c for c in cols_agrup if c in df_full.columns]
 
-# 3) Garantias de tipos
+# Garantias de tipos
 df_full["data_emissao"] = pd.to_datetime(df_full["data_emissao"], errors="coerce")
 df_ano["data_emissao"] = pd.to_datetime(df_ano["data_emissao"], errors="coerce")
 
@@ -305,10 +303,7 @@ for c in ["v_total_item", "v_unit_real", "qtd_real"]:
     df_full[c] = pd.to_numeric(df_full[c], errors="coerce").fillna(0)
     df_ano[c] = pd.to_numeric(df_ano[c], errors="coerce").fillna(0)
 
-# ------------------------------------------------------------------------------
-# A) BENCHMARK HISTÓRICO GLOBAL (todos os anos)
-#    Preco_Medio_Historico / Menor / Maior / Qtd_Compras_Hist
-# ------------------------------------------------------------------------------
+# A) Benchmark histórico global
 df_hist = (
     df_full.groupby(cols_reais, dropna=False)
     .agg(
@@ -320,10 +315,7 @@ df_hist = (
     .reset_index()
 )
 
-# ------------------------------------------------------------------------------
-# B) ÚLTIMA COMPRA GLOBAL (mais recente no histórico inteiro)
-#    Ultimo_Preco / Ultima_Data / Ultimo_Forn
-# ------------------------------------------------------------------------------
+# B) Última compra global
 df_full_sorted = df_full.sort_values("data_emissao")
 df_last_global = (
     df_full_sorted.groupby(cols_reais, dropna=False)
@@ -339,9 +331,7 @@ df_last_global = (
     .copy()
 )
 
-# ------------------------------------------------------------------------------
-# C) IMPACTO NO ANO SELECIONADO (quantidade e gasto do ano)
-# ------------------------------------------------------------------------------
+# C) Impacto no ano selecionado
 df_impacto_ano = (
     df_ano.groupby(cols_reais, dropna=False)
     .agg(
@@ -352,13 +342,11 @@ df_impacto_ano = (
     .reset_index()
 )
 
-# ------------------------------------------------------------------------------
-# D) JUNTAR TUDO EM UM DF FINAL DE OPORTUNIDADES
-# ------------------------------------------------------------------------------
+# D) Unir
 df_grouped = df_impacto_ano.merge(df_hist, on=cols_reais, how="left")
 df_grouped = df_grouped.merge(df_last_global, on=cols_reais, how="left")
 
-# saneamento numérico
+# Saneamento numérico
 for c in [
     "Total_Gasto_Ano", "Qtd_Total_Ano", "Qtd_Compras_Ano",
     "Preco_Medio_Historico", "Menor_Preco_Hist", "Maior_Preco_Hist", "Qtd_Compras_Hist",
@@ -367,23 +355,19 @@ for c in [
     if c in df_grouped.columns:
         df_grouped[c] = pd.to_numeric(df_grouped[c], errors="coerce").fillna(0)
 
-# ------------------------------------------------------------------------------
-# E) CÁLCULO DO SAVING (se tivesse comprado ao preço médio histórico)
-#    Comparando com o último preço (mais recente do histórico global)
-#    Impacto medido pela quantidade do ANO selecionado
-# ------------------------------------------------------------------------------
+# E) Saving equalizado (benchmark global x último preço global, impacto no ano)
 df_grouped["Saving_Equalizado"] = (
     (df_grouped["Ultimo_Preco"] - df_grouped["Preco_Medio_Historico"]) * df_grouped["Qtd_Total_Ano"]
 )
 df_grouped["Saving_Equalizado"] = df_grouped["Saving_Equalizado"].fillna(0).clip(lower=0)
 
-# (Opcional) Saving idealizado, usando menor preço histórico
+# F) Potencial idealizado (opcional)
 df_grouped["Saving_Potencial"] = (
     (df_grouped["Ultimo_Preco"] - df_grouped["Menor_Preco_Hist"]) * df_grouped["Qtd_Total_Ano"]
 )
 df_grouped["Saving_Potencial"] = df_grouped["Saving_Potencial"].fillna(0).clip(lower=0)
 
-# Volatilidade histórica (ajuda a filtrar oportunidades reais)
+# Volatilidade histórica (para filtros e explicações)
 df_grouped["Volatilidade_Hist"] = 0.0
 mask = df_grouped["Menor_Preco_Hist"] > 0
 df_grouped.loc[mask, "Volatilidade_Hist"] = (
@@ -391,11 +375,7 @@ df_grouped.loc[mask, "Volatilidade_Hist"] = (
     / df_grouped.loc[mask, "Menor_Preco_Hist"]
 )
 
-# ------------------------------------------------------------------------------
-# F) Compatibilidade com abas existentes
-#    Muitos lugares esperam colunas com nomes antigos (Total_Gasto / Qtd_Total / Menor_Preco etc).
-#    Vamos criar aliases para não quebrar UI.
-# ------------------------------------------------------------------------------
+# Compatibilidade com nomes antigos
 df_grouped["Total_Gasto"] = df_grouped["Total_Gasto_Ano"]
 df_grouped["Qtd_Total"] = df_grouped["Qtd_Total_Ano"]
 df_grouped["Menor_Preco"] = df_grouped["Menor_Preco_Hist"]
@@ -403,25 +383,21 @@ df_grouped["Maior_Preco"] = df_grouped["Maior_Preco_Hist"]
 df_grouped["Qtd_Compras"] = df_grouped["Qtd_Compras_Ano"]
 
 # ==============================================================================
-# RENDERIZAÇÃO DAS ABAS
+# TABS (Dashboard removido)
 # ==============================================================================
-tabs = st.tabs(["📌 Visão Executiva", "📊 Dashboard", "🛡️ Compliance", "📇 Fornecedores", "💰 Cockpit", "🔍 Busca"])
+tabs = st.tabs(["📌 Sumário Executivo", "🛡️ Compliance", "📇 Fornecedores", "💰 Cockpit", "🔍 Busca"])
 
 with tabs[0]:
-    # df_ano = recorte do ano (visão do ano); df_grouped = oportunidades com benchmark global
     render_tab_exec_review(df_ano, df_grouped)
 
 with tabs[1]:
-    render_tab_dashboard(df_ano, df_grouped)
-
-with tabs[2]:
     render_tab_compliance(df_full)
 
-with tabs[3]:
+with tabs[2]:
     render_tab_fornecedores(df_full, df_grouped)
 
-with tabs[4]:
+with tabs[3]:
     render_tab_negociacao(df_full)
 
-with tabs[5]:
+with tabs[4]:
     render_tab_busca(df_full)
