@@ -2,107 +2,120 @@ import streamlit as st
 import pandas as pd
 from utils.formatters import format_brl
 
-def render_tab_busca(df_full):
-    # Importante: Recebemos df_full (Base Completa) com colunas normalizadas (v_unit_real)
-    
-    st.markdown("### 🔍 Banco de Preços (Histórico Completo)")
-    st.caption("Pesquise em todo o histórico de compras da empresa. Preços normalizados (CX -> UN) para equalização.")
+def render_tab_busca(df):
+    st.markdown("### 🔍 Busca Avançada de Itens")
+    st.caption("Pesquise em todo o histórico de compras (Base Completa).")
 
-    # 1. BARRA DE PESQUISA (Começa vazia e limpa)
-    c1, c2 = st.columns([3, 1])
+    # 1. FILTROS DE BUSCA
+    c1, c2, c3 = st.columns([3, 1, 1])
     
     with c1:
-        termo_busca = st.text_input(
-            "O que você procura?", 
-            value="", # Garante que comece vazio
-            placeholder="Ex: Rolamento, Cimento, Luva..."
-        )
-        
+        termo_busca = st.text_input("Digite o nome do produto, código ou aplicação:", placeholder="Ex: Rolamento, Parafuso, Luva...")
+    
     with c2:
-        # Filtro de categoria
-        if 'Categoria' in df_full.columns:
-            cats_disponiveis = sorted(df_full['Categoria'].unique())
-            filtro_cat = st.selectbox("Filtrar Categoria (Opcional)", options=["Todas"] + cats_disponiveis)
-        else:
-            filtro_cat = "Todas"
+        # Filtro de Categoria (opcional)
+        categorias = ["Todas"] + sorted(df['Categoria'].unique().tolist())
+        cat_sel = st.selectbox("Categoria:", options=categorias)
+        
+    with c3:
+        # Filtro de Fornecedor (opcional)
+        fornecedores = ["Todos"] + sorted(df['nome_emit'].unique().tolist())
+        forn_sel = st.selectbox("Fornecedor:", options=fornecedores)
 
+    # 2. LÓGICA DE FILTRAGEM
+    df_result = df.copy()
+
+    if termo_busca:
+        # Busca insensível a maiúsculas/minúsculas
+        df_result = df_result[
+            df_result['desc_prod'].str.contains(termo_busca, case=False, na=False) |
+            df_result['cod_prod'].astype(str).str.contains(termo_busca, case=False, na=False)
+        ]
+
+    if cat_sel != "Todas":
+        df_result = df_result[df_result['Categoria'] == cat_sel]
+
+    if forn_sel != "Todos":
+        df_result = df_result[df_result['nome_emit'] == forn_sel]
+
+    # Se não houver resultados
+    if df_result.empty:
+        st.warning("Nenhum item encontrado com esses filtros.")
+        return
+
+    st.markdown(f"**Encontrados:** {len(df_result)} registros | **Volume Financeiro:** {format_brl(df_result['v_total_item'].sum())}")
+    
     st.divider()
 
-    # 2. LÓGICA DE BUSCA (Só roda se tiver termo ou filtro)
-    if not termo_busca and filtro_cat == "Todas":
-        st.info("👈 Digite algo acima para começar a pesquisar no banco de dados.")
-        return
-
-    # Filtra a base completa
-    df_result = df_full.copy()
+    # 3. VISÃO AGRUPADA (Resumo do Item)
+    st.subheader("📦 Resumo por Item")
     
-    # Filtro de Texto (Case insensitive)
-    if termo_busca:
-        termo = termo_busca.upper().strip()
-        mask_desc = df_result['desc_prod'].str.contains(termo)
-        mask_cod = df_result['cod_prod'].str.contains(termo)
-        df_result = df_result[mask_desc | mask_cod]
-    
-    # Filtro de Categoria
-    if filtro_cat != "Todas":
-        df_result = df_result[df_result['Categoria'] == filtro_cat]
+    # Define as chaves de agrupamento com segurança
+    # Se 'cod_prod' estiver vazio ou zerado, agrupa só pela descrição
+    group_cols = ['desc_prod', 'Categoria']
+    if 'cod_prod' in df_result.columns:
+        group_cols.append('cod_prod')
 
-    if df_result.empty:
-        st.warning("Nenhum item encontrado com esses critérios.")
-        return
-
-    # 3. CONSTRUÇÃO DA TABELA INTELIGENTE (EQUALIZADA)
-    
-    # A) Achar o Melhor Fornecedor usando PREÇO REAL (Normalizado)
-    # Isso evita que o fornecedor que vendeu 1 Unidade ganhe do que vendeu 1 Caixa (se a caixa for mais barata no unitário)
-    idx_min_price = df_result.groupby('desc_prod')['v_unit_real'].idxmin()
-    df_best = df_result.loc[idx_min_price, ['desc_prod', 'nome_emit', 'v_unit_real', 'data_emissao']]
-    df_best.rename(columns={
-        'nome_emit': 'Melhor Fornecedor', 
-        'v_unit_real': 'Melhor Preço (Eq.)',
-        'data_emissao': 'Data Ref.'
-    }, inplace=True)
-
-    # B) Estatísticas Gerais
-    df_view = df_result.groupby(['desc_prod', 'Categoria', 'cod_prod']).agg(
-        Preco_Medio=('v_unit_real', 'mean'), # Média do preço REAL (convertido)
-        Ultimo_Preco=('v_unit_real', 'last'), # Último preço REAL
-        Unidade_Padrao=('un_real', lambda x: x.mode()[0] if not x.mode().empty else 'UN'), # Unidade mais comum
-        Qtd_Compras=('n_nf', 'count')
+    # Agregação usando as NOVAS colunas (v_unit_real, qtd_real, u_medida)
+    # Usamos a moda (valor mais comum) para a Unidade de Medida
+    df_group = df_result.groupby(group_cols).agg(
+        Preco_Medio=('v_unit_real', 'mean'),
+        Preco_Min=('v_unit_real', 'min'),
+        Preco_Max=('v_unit_real', 'max'),
+        Qtd_Total=('qtd_real', 'sum'),
+        Gasto_Total=('v_total_item', 'sum'),
+        Qtd_Compras=('n_nf', 'count'),
+        Unidade=('u_medida', lambda x: x.mode()[0] if not x.mode().empty else x.iloc[0])
     ).reset_index()
 
-    # C) Merge das Informações
-    df_view = df_view.merge(df_best, on='desc_prod')
-
-    # Limita resultados para performance (Top 100 mais frequentes)
-    df_view = df_view.sort_values('Qtd_Compras', ascending=False).head(100)
-
-    # D) Formatação Visual
-    df_view['Preço Médio (Eq.)'] = df_view['Preco_Medio'].apply(format_brl)
-    df_view['Melhor Preço (Eq.)'] = df_view['Melhor Preço (Eq.)'].apply(format_brl)
+    # Formatação para exibição
+    df_view = df_group.sort_values('Gasto_Total', ascending=False).copy()
     
-    # Seleção final de colunas
-    cols_to_show = [
-        'Categoria', 
-        'desc_prod', 
-        'Unidade_Padrao',
-        'Preço Médio (Eq.)', 
-        'Melhor Fornecedor', 
-        'Melhor Preço (Eq.)', 
-        'Data Ref.',
-        'Qtd_Compras'
-    ]
+    df_view['Preço Médio'] = df_view['Preco_Medio'].apply(format_brl)
+    df_view['Menor Preço'] = df_view['Preco_Min'].apply(format_brl)
+    df_view['Maior Preço'] = df_view['Preco_Max'].apply(format_brl)
+    df_view['Total Gasto'] = df_view['Gasto_Total'].apply(format_brl)
+
+    # Seleção de colunas finais
+    cols_final = ['desc_prod', 'Categoria', 'Unidade', 'Qtd_Compras', 'Qtd_Total', 'Preço Médio', 'Menor Preço', 'Maior Preço', 'Total Gasto']
+    if 'cod_prod' in df_view.columns:
+        cols_final.insert(1, 'cod_prod')
 
     st.dataframe(
-        df_view[cols_to_show],
+        df_view[cols_final],
         column_config={
-            "desc_prod": "Descrição do Material",
-            "Unidade_Padrao": st.column_config.TextColumn("Unid.", help="Unidade normalizada (ex: CX virou UN)"),
-            "Preço Médio (Eq.)": st.column_config.TextColumn("Preço Médio", help="Preço equalizado para a unidade padrão"),
-            "Melhor Preço (Eq.)": st.column_config.TextColumn("Melhor Preço", help="Menor preço histórico encontrado (equalizado)"),
-            "Data Ref.": st.column_config.DateColumn("Melhor Compra", format="DD/MM/YYYY"),
-            "Qtd_Compras": st.column_config.NumberColumn("Freq.", help="Quantas vezes já compramos")
+            "desc_prod": "Descrição do Item",
+            "cod_prod": "Cód.",
+            "Qtd_Compras": st.column_config.NumberColumn("Freq.", format="%d"),
+            "Qtd_Total": st.column_config.NumberColumn("Vol. Qtd", format="%.2f")
         },
         use_container_width=True,
         hide_index=True
     )
+
+    # 4. DETALHE DOS REGISTROS (Tabela Completa)
+    with st.expander("📝 Ver Detalhe de Todas as Compras (Histórico Completo)"):
+        # Prepara tabela detalhada
+        df_detalhe = df_result.sort_values('data_emissao', ascending=False).copy()
+        
+        # Formatações
+        df_detalhe['Data'] = df_detalhe['data_emissao'].dt.strftime('%d/%m/%Y')
+        df_detalhe['Preço Unit.'] = df_detalhe['v_unit_real'].apply(format_brl)
+        df_detalhe['Total Item'] = df_detalhe['v_total_item'].apply(format_brl)
+        
+        # Colunas de exibição
+        cols_detalhe = ['Data', 'nome_emit', 'n_nf', 'desc_prod', 'qtd_real', 'u_medida', 'Preço Unit.', 'Total Item']
+        if 'cod_tributario' in df_detalhe.columns:
+             cols_detalhe.append('cod_tributario')
+
+        st.dataframe(
+            df_detalhe[cols_detalhe],
+            column_config={
+                "nome_emit": "Fornecedor",
+                "qtd_real": st.column_config.NumberColumn("Qtd", format="%.2f"),
+                "u_medida": "Un.",
+                "cod_tributario": "CST/CSOSN"
+            },
+            use_container_width=True,
+            hide_index=True
+        )
