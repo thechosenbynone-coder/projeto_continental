@@ -5,6 +5,7 @@ import os
 import re
 import unicodedata
 from difflib import SequenceMatcher
+import time
 
 # --- IMPORTS ---
 from styles.theme import aplicar_tema
@@ -139,7 +140,7 @@ def carregar_dados(_db_stamp: float) -> pd.DataFrame:
 
 
 # ==============================================================================
-# DETETIVE (enriquecimento)
+# DETETIVE
 # ==============================================================================
 
 def enriquecer_dados_detetive(df_xml: pd.DataFrame, df_mapa: pd.DataFrame):
@@ -174,15 +175,14 @@ def enriquecer_dados_detetive(df_xml: pd.DataFrame, df_mapa: pd.DataFrame):
             if nf:
                 dict_mapa.setdefault(nf, []).append(row)
 
-        af_list, cc_list, plano_list, status_list = [], [], [], []
-        total_matches = 0
-
-        # garantir colunas
         df_xml = df_xml.copy()
         if "n_nf_clean" not in df_xml.columns:
             df_xml["n_nf_clean"] = df_xml.get("n_nf", "").astype(str).apply(limpar_nf_excel)
         if "nome_emit" not in df_xml.columns:
             df_xml["nome_emit"] = "N/D"
+
+        af_list, cc_list, plano_list, status_list = [], [], [], []
+        total_matches = 0
 
         for _, row_xml in df_xml.iterrows():
             nf_xml = row_xml["n_nf_clean"]
@@ -192,16 +192,15 @@ def enriquecer_dados_detetive(df_xml: pd.DataFrame, df_mapa: pd.DataFrame):
             melhor_candidato = None
             melhor_score = 0
 
-            if candidatos:
-                for cand in candidatos:
-                    if mapa_cols["FORNECEDOR"]:
-                        nome_mapa = str(cand[mapa_cols["FORNECEDOR"]])
-                        score = calcular_similaridade(forn_xml, nome_mapa)
-                    else:
-                        score = 50
-                    if score > melhor_score:
-                        melhor_score = score
-                        melhor_candidato = cand
+            for cand in candidatos:
+                if mapa_cols["FORNECEDOR"]:
+                    nome_mapa = str(cand[mapa_cols["FORNECEDOR"]])
+                    score = calcular_similaridade(forn_xml, nome_mapa)
+                else:
+                    score = 50
+                if score > melhor_score:
+                    melhor_score = score
+                    melhor_candidato = cand
 
             aceitar = False
             status = "Não Encontrado"
@@ -250,7 +249,7 @@ def enriquecer_dados_detetive(df_xml: pd.DataFrame, df_mapa: pd.DataFrame):
         return df_xml, ["AF_MAPA", "CC_MAPA", "PLANO_MAPA", "STATUS_MATCH"], total_matches
 
     except Exception as e:
-        st.error(f"Erro no Detetive: {e}")
+        st.exception(e)
         return df_xml, [], 0
 
 
@@ -260,12 +259,8 @@ def enriquecer_dados_detetive(df_xml: pd.DataFrame, df_mapa: pd.DataFrame):
 
 @st.cache_data(show_spinner=False)
 def cache_global_stats(_db_stamp: float, data_version: int, cols_reais: tuple, df_full_work: pd.DataFrame):
-    """
-    Stats globais (todos os anos), cacheados.
-    """
     keys = list(cols_reais)
 
-    # observed=False evita mudanças futuras do pandas e funciona bem com category
     df_hist = (
         df_full_work.groupby(keys, dropna=False, observed=False)
         .agg(
@@ -277,9 +272,19 @@ def cache_global_stats(_db_stamp: float, data_version: int, cols_reais: tuple, d
         .reset_index()
     )
 
-    # última compra global sem sort: idxmax por grupo
-    idx = df_full_work.groupby(keys, dropna=False, observed=False)["data_emissao"].idxmax()
-    last = df_full_work.loc[idx, keys + ["v_unit_real", "data_emissao", "nome_emit", "qtd_real"]].copy()
+    # ✅ ÚLTIMA COMPRA GLOBAL - ROBUSTA
+    df_valid = df_full_work.dropna(subset=["data_emissao"]).copy()
+    if df_valid.empty:
+        # não quebra: devolve estrutura vazia
+        df_last_global = df_full_work.head(0)[keys].copy()
+        df_last_global["Ultimo_Preco"] = 0.0
+        df_last_global["Ultima_Data"] = pd.NaT
+        df_last_global["Ultimo_Forn"] = ""
+        df_last_global["Qtd_Ultima_Compra"] = 0.0
+        return df_hist, df_last_global
+
+    idx = df_valid.groupby(keys, dropna=False, observed=False)["data_emissao"].idxmax()
+    last = df_valid.loc[idx, keys + ["v_unit_real", "data_emissao", "nome_emit", "qtd_real"]].copy()
     df_last_global = last.rename(
         columns={
             "v_unit_real": "Ultimo_Preco",
@@ -294,9 +299,6 @@ def cache_global_stats(_db_stamp: float, data_version: int, cols_reais: tuple, d
 
 @st.cache_data(show_spinner=False)
 def cache_year_impact(_db_stamp: float, data_version: int, ano_sel: int, cols_reais: tuple, df_full_work: pd.DataFrame):
-    """
-    Recorte anual + impacto anual, cacheados.
-    """
     keys = list(cols_reais)
     df_ano = df_full_work[df_full_work["ano"] == ano_sel].copy()
 
@@ -321,7 +323,6 @@ def preparar_oportunidades(ano_sel: int, cols_reais: list, _db_stamp: float, dat
     df_grouped = df_impacto_ano.merge(df_hist, on=list(cols_tuple), how="left")
     df_grouped = df_grouped.merge(df_last_global, on=list(cols_tuple), how="left")
 
-    # saneamento numérico
     for c in [
         "Total_Gasto_Ano", "Qtd_Total_Ano", "Qtd_Compras_Ano",
         "Preco_Medio_Historico", "Menor_Preco_Hist", "Maior_Preco_Hist", "Qtd_Compras_Hist",
@@ -330,12 +331,10 @@ def preparar_oportunidades(ano_sel: int, cols_reais: list, _db_stamp: float, dat
         if c in df_grouped.columns:
             df_grouped[c] = pd.to_numeric(df_grouped[c], errors="coerce").fillna(0)
 
-    # saving equalizado (impacto no ano, benchmark global)
     df_grouped["Saving_Equalizado"] = (
         (df_grouped["Ultimo_Preco"] - df_grouped["Preco_Medio_Historico"]) * df_grouped["Qtd_Total_Ano"]
     ).fillna(0).clip(lower=0)
 
-    # potencial (opcional)
     df_grouped["Saving_Potencial"] = (
         (df_grouped["Ultimo_Preco"] - df_grouped["Menor_Preco_Hist"]) * df_grouped["Qtd_Total_Ano"]
     ).fillna(0).clip(lower=0)
@@ -357,13 +356,14 @@ def preparar_oportunidades(ano_sel: int, cols_reais: list, _db_stamp: float, dat
 st.title("🏗️ Portal de Inteligência em Suprimentos")
 
 db_stamp = _db_mtime()
+t0 = time.perf_counter()
 df_full = carregar_dados(db_stamp)
 
 if df_full.empty:
     st.error("Base vazia. Rode o extrator.")
     st.stop()
 
-# session_state: dataset de trabalho + versionamento
+# session_state
 if "df_full_work" not in st.session_state:
     st.session_state.df_full_work = df_full.copy()
 if "data_version" not in st.session_state:
@@ -371,7 +371,6 @@ if "data_version" not in st.session_state:
 if "last_db_stamp" not in st.session_state:
     st.session_state.last_db_stamp = db_stamp
 
-# DB mudou? atualiza dataset e invalida caches
 if st.session_state.last_db_stamp != db_stamp:
     st.session_state.df_full_work = df_full.copy()
     st.session_state.data_version += 1
@@ -379,8 +378,10 @@ if st.session_state.last_db_stamp != db_stamp:
 
 df_full_work = st.session_state.df_full_work
 
-# Sidebar: detetive
 with st.sidebar:
+    debug = st.checkbox("🧪 Debug", value=False)
+    st.caption("Ative para ver tempos e sanidade dos dados.")
+
     st.header("🕵️ Inteligência de Negócio")
     uploaded_files = st.file_uploader(
         "Carregar Mapas (CSV/Excel)",
@@ -404,21 +405,15 @@ with st.sidebar:
                     st.session_state.df_full_work = df_enriched
                     st.session_state.data_version += 1
                     df_full_work = st.session_state.df_full_work
-
                     if matches > 0:
                         st.success(f"{matches} vínculos encontrados!")
                     else:
                         st.warning("Nenhum match encontrado.")
 
-# Visão integrada (se houver mapeamento)
-if "AF_MAPA" in df_full_work.columns:
-    st.markdown("### 📊 Visão Integrada")
-    df_m = df_full_work[df_full_work["AF_MAPA"] != "Não Mapeado"]
-    if not df_m.empty:
-        c1, c2, c3 = st.columns(3)
-        c1.bar_chart(df_m.groupby("CC_MAPA", dropna=False, observed=False)["v_total_item"].sum(), horizontal=True)
-        c2.bar_chart(df_m.groupby("PLANO_MAPA", dropna=False, observed=False)["v_total_item"].sum(), horizontal=True)
-        c3.metric("Cobertura", f"{(len(df_m) / len(df_full_work)) * 100:.1f}%")
+if debug:
+    st.info(f"Linhas df_full_work: {len(df_full_work):,}".replace(",", "."))
+    st.info(f"data_emissao nulas: {int(df_full_work['data_emissao'].isna().sum()):,}".replace(",", "."))
+    st.info(f"Tempo load+prep base: {time.perf_counter() - t0:.2f}s")
 
 st.divider()
 
@@ -428,7 +423,7 @@ ano_sel = st.pills("Ano", options=anos, default=anos[0], selection_mode="single"
 if not ano_sel:
     ano_sel = anos[0]
 
-# Colunas de agrupamento (dinâmicas)
+# Colunas de agrupamento
 cols_agrup = ["desc_prod", "ncm", "Categoria"]
 if "cod_prod" in df_full_work.columns:
     cols_agrup.append("cod_prod")
@@ -436,29 +431,28 @@ if "AF_MAPA" in df_full_work.columns:
     cols_agrup.extend(["AF_MAPA", "CC_MAPA", "PLANO_MAPA"])
 
 cols_reais = [c for c in cols_agrup if c in df_full_work.columns]
-
-# ✅ GUARDA-CHUVA: nunca permitir cols_reais vazio
 if not cols_reais:
-    # fallback mais seguro possível
     if "desc_prod" in df_full_work.columns:
         cols_reais = ["desc_prod"]
     else:
-        # cria chave artificial (último recurso)
         df_full_work = df_full_work.copy()
         df_full_work["__KEY__"] = "ALL"
         cols_reais = ["__KEY__"]
 
-# Monta indicadores com cache
-with st.spinner("Preparando indicadores..."):
-    df_ano, df_grouped = preparar_oportunidades(
-        ano_sel=ano_sel,
-        cols_reais=cols_reais,
-        _db_stamp=db_stamp,
-        data_version=st.session_state.data_version,
-        df_full_work=df_full_work,
-    )
+try:
+    with st.spinner("Preparando indicadores..."):
+        df_ano, df_grouped = preparar_oportunidades(
+            ano_sel=ano_sel,
+            cols_reais=cols_reais,
+            _db_stamp=db_stamp,
+            data_version=st.session_state.data_version,
+            df_full_work=df_full_work,
+        )
+except Exception as e:
+    st.error("Quebra no preparo dos indicadores (veja detalhes abaixo).")
+    st.exception(e)
+    st.stop()
 
-# Tabs
 tabs = st.tabs(["📌 Sumário Executivo", "🛡️ Compliance", "📇 Fornecedores", "💰 Cockpit", "🔍 Busca"])
 
 with tabs[0]:
